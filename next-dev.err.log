@@ -1,0 +1,12 @@
+⚠ Warning: Next.js ignored package-lock.json in C:\Users\ADMIN\Downloads because it is outside the current Git repository (C:\Users\ADMIN\Downloads\AI TUTOR\AI_Tutor-Admin\ai-tutor-admin).
+ To use this directory, set `turbopack.root` in your Next.js config.
+
+⨯ Another next dev server is already running.
+
+- Local:        http://localhost:3000
+- PID:          3372
+- Dir:          C:\Users\ADMIN\Downloads\AI TUTOR\AI_Tutor-Admin\ai-tutor-admin
+- Log:          .next\dev\logs\next-development.log
+
+You can access the existing server at http://localhost:3000,
+or run taskkill /PID 3372 /F to stop it and start a new one.
