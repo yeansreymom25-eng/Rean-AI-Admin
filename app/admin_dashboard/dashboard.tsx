@@ -2,108 +2,115 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useMemo, useState, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  adminLogout,
+  clearAdminSession,
+  type AdminDashboardData,
+  type DashboardNotification,
+  type CurriculumStatusItem,
+  type FlaggedAiSession,
+  getAccessToken,
+  loadAdminDashboard,
+  type StudentActivityPoint,
+} from "../_features/auth/adminAuth";
+import { curriculumLinks } from "../_features/curriculum/data";
 
-const navItems = [
-  { label: "Dashboard", icon: "dashboard", href: "/admin_dashboard", active: true },
-  { label: "Curriculum", icon: "curriculum", href: "/grade_levels" },
-  { label: "Students", icon: "students", href: "/students" },
-  { label: "Settings", icon: "settings", href: "/settings" },
-];
-
-const stats = [
+const loadingStats = [
   {
     label: "Total Students",
-    value: "1,240",
-    accent: "+12% this month",
+    value: "...",
+    accent: "Fetching backend data",
     icon: "students",
     color: "text-[#5368ff]",
   },
   {
     label: "Active AI Sessions",
-    value: "85",
-    accent: "Live now",
+    value: "...",
+    accent: "Fetching backend data",
     icon: "AI",
     color: "text-[#1fc7e9]",
   },
   {
     label: "Curriculum Progress",
-    value: "78%",
-    accent: "Grades 10-12",
+    value: "...",
+    accent: "Fetching backend data",
     icon: "%",
     color: "text-[#7a4dff]",
   },
   {
     label: "AI Quality Score",
-    value: "4.8",
-    accent: "Excellent",
+    value: "...",
+    accent: "Fetching backend data",
     icon: "quality",
     color: "text-emerald-300",
   },
 ];
 
-const sessions = [
-  {
-    id: "#AI-8942",
-    name: "Sopheak Mith",
-    subject: "Physics",
-    grade: "Grade 10",
-    reason: "Low confidence answer",
-    status: "Amber",
-    time: "8 min ago",
-  },
-  {
-    id: "#AI-8945",
-    name: "Vanna Rak",
-    subject: "Math",
-    grade: "Grade 11",
-    reason: "Policy violation: off-topic answer",
-    status: "Red",
-    time: "16 min ago",
-  },
-  {
-    id: "#AI-8948",
-    name: "Leakena Chan",
-    subject: "Chemistry",
-    grade: "Grade 12",
-    reason: "Repeated hallucination detected",
-    status: "Red",
-    time: "24 min ago",
-  },
-  {
-    id: "#AI-8951",
-    name: "Dara Sok",
-    subject: "Physics",
-    grade: "Grade 10",
-    reason: "Needs teacher review",
-    status: "Amber",
-    time: "31 min ago",
-  },
-  {
-    id: "#AI-8954",
-    name: "Srey Pov",
-    subject: "Math",
-    grade: "Grade 12",
-    reason: "Escalated quiz explanation",
-    status: "Amber",
-    time: "42 min ago",
-  },
-];
+type Session = FlaggedAiSession;
+const DASHBOARD_CACHE_KEY = "rean_admin_dashboard_cache_v2";
 
-const curriculumHealth = [
-  { label: "Math", value: 44, color: "#5368ff" },
-  { label: "Physics", value: 32, color: "#1fc7e9" },
-  { label: "Chemistry", value: 24, color: "#7a4dff" },
-];
-
-type Session = (typeof sessions)[number];
+function isAuthExpiredError(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  return (
+    error.message.includes("Admin session") ||
+    error.message.includes("Invalid or expired authentication token") ||
+    error.message.includes("Admin access is required")
+  );
+}
 
 export default function Dashboard() {
+  const router = useRouter();
   const [range, setRange] = useState<"7" | "30">("7");
+  const [isCurriculumOpen, setIsCurriculumOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<"All" | "Amber" | "Red">("All");
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
   const [page, setPage] = useState(1);
+  const [dashboardData, setDashboardData] = useState<AdminDashboardData | null>(null);
+  const [dashboardError, setDashboardError] = useState("");
+
+  useEffect(() => {
+    if (!getAccessToken()) {
+      router.replace("/auth/Login");
+      return;
+    }
+
+    const cachedDashboard = readCachedDashboard();
+    if (cachedDashboard) {
+      setDashboardData(cachedDashboard);
+    }
+
+    loadAdminDashboard()
+      .then((data) => {
+        setDashboardData(data);
+        storeCachedDashboard(data);
+        setDashboardError("");
+      })
+      .catch((error) => {
+        if (isAuthExpiredError(error)) {
+          clearAdminSession();
+          router.replace("/auth/Login");
+          return;
+        }
+        setDashboardError(error instanceof Error ? error.message : "Unable to load dashboard");
+      });
+  }, [router]);
+
+  const admin = dashboardData?.admin;
+  const adminName = admin?.full_name || "Admin";
+  const adminRole = admin?.role === "administrator" ? "Administrator" : "Admin";
+  const adminPhoto = admin?.profile_image_url || null;
+  const adminInitials = adminName
+    .split(" ")
+    .map((part) => part[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+  const stats = buildStats(dashboardData);
+  const sessions = dashboardData?.insights.flagged_ai_sessions ?? [];
+  const notifications = dashboardData?.insights.notifications ?? [];
 
   const filteredSessions = useMemo(
     () =>
@@ -125,6 +132,11 @@ export default function Dashboard() {
     setPage(1);
   }
 
+  async function handleSignOut() {
+    await adminLogout();
+    router.replace("/auth/Login");
+  }
+
   return (
     <main className="min-h-screen bg-[#070b19] text-slate-100">
       <div className="flex min-h-screen">
@@ -132,40 +144,80 @@ export default function Dashboard() {
           <Brand />
 
           <nav className="mt-10 space-y-2">
-            {navItems.map((item) => (
-              <Link
-                key={item.label}
-                href={item.href}
-                className={`flex h-11 w-full items-center gap-4 rounded-xl px-4 text-left text-sm font-semibold transition ${
-                  item.active
-                    ? "bg-gradient-to-r from-[#4367ff] to-[#7a4dff] text-white shadow-lg shadow-blue-950/30"
-                    : "text-slate-500 hover:bg-[#101a2b] hover:text-slate-200"
-                }`}
+            <Link
+              href="/admin_dashboard"
+              className="flex h-11 w-full items-center gap-4 rounded-xl bg-gradient-to-r from-[#4367ff] to-[#7a4dff] px-4 text-left text-sm font-semibold text-white shadow-lg shadow-blue-950/30 transition"
+            >
+              <SidebarIcon name="dashboard" />
+              Dashboard
+            </Link>
+
+            <div>
+              <button
+                type="button"
+                onClick={() => setIsCurriculumOpen((isOpen) => !isOpen)}
+                className="flex h-11 w-full items-center gap-4 rounded-xl px-4 text-left text-sm font-semibold text-slate-500 transition hover:bg-[#101a2b] hover:text-slate-200"
+                aria-expanded={isCurriculumOpen}
               >
-                <SidebarIcon name={item.icon} />
-                {item.label}
-                {item.label === "Curriculum" && (
-                  <span className="ml-auto text-sm font-extrabold text-[#7da6e6]">
-                    v
-                  </span>
-                )}
-              </Link>
-            ))}
+                <SidebarIcon name="curriculum" />
+                Curriculum
+                <span className={`ml-auto flex h-5 w-5 items-center justify-center text-[#7da6e6] transition-transform ${isCurriculumOpen ? "rotate-180" : "rotate-0"}`}>
+                  <ChevronDownIcon />
+                </span>
+              </button>
+              {isCurriculumOpen && (
+                <div className="space-y-2 px-4 pb-4 pl-[60px]">
+                  {curriculumLinks.map((item) => (
+                    <Link
+                      key={item.label}
+                      href={item.href}
+                      className="flex h-11 w-full items-center rounded-lg px-4 text-sm font-bold text-[#6f89b4] transition hover:bg-[#101a2b] hover:text-slate-200"
+                    >
+                      {item.label}
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <Link
+              href="/students"
+              className="flex h-11 w-full items-center gap-4 rounded-xl px-4 text-left text-sm font-semibold text-slate-500 transition hover:bg-[#101a2b] hover:text-slate-200"
+            >
+              <SidebarIcon name="students" />
+              Students
+            </Link>
+            <Link
+              href="/settings"
+              className="flex h-11 w-full items-center gap-4 rounded-xl px-4 text-left text-sm font-semibold text-slate-500 transition hover:bg-[#101a2b] hover:text-slate-200"
+            >
+              <SidebarIcon name="settings" />
+              Settings
+            </Link>
           </nav>
 
           <div className="mt-auto">
             <div className="flex items-center gap-3 px-4 py-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-r from-[#4367ff] to-[#7a4dff] text-sm font-bold">
-                A
+              <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-gradient-to-r from-[#4367ff] to-[#7a4dff] text-sm font-bold">
+                {adminPhoto ? (
+                  <img
+                    src={adminPhoto}
+                    alt={`${adminName} admin profile`}
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  adminInitials || "A"
+                )}
               </div>
               <div>
-                <p className="text-sm font-bold text-white">Charya Som</p>
-                <Link
-                  href="/auth/Login"
+                <p className="text-sm font-bold text-white">{adminName}</p>
+                <button
+                  type="button"
+                  onClick={handleSignOut}
                   className="text-xs font-semibold text-rose-400 transition hover:text-rose-300"
                 >
                   Sign out
-                </Link>
+                </button>
               </div>
             </div>
           </div>
@@ -196,22 +248,33 @@ export default function Dashboard() {
                 aria-expanded={isNotificationsOpen}
               >
                 <NotificationIcon />
-                <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-[#5368ff]" />
+                {notifications.length > 0 && (
+                  <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-[#5368ff]" />
+                )}
               </button>
               {isNotificationsOpen && (
                 <NotificationsPanel
+                  notifications={notifications}
                   onClose={() => setIsNotificationsOpen(false)}
                 />
               )}
               <div className="hidden text-right sm:block">
-                <p className="text-sm font-bold text-white">Charya Som</p>
-                <p className="text-xs text-slate-500">Senior Admin</p>
+                <p className="text-sm font-bold text-white">{adminName}</p>
+                <p className="text-xs text-slate-500">{adminRole}</p>
               </div>
               <div
-                aria-label="Charya Som admin profile"
-                className="flex h-11 w-11 items-center justify-center rounded-full border-2 border-[#5368ff] bg-gradient-to-br from-[#4367ff] to-[#7a4dff] text-sm font-extrabold text-white"
+                aria-label={`${adminName} admin profile`}
+                className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-full border-2 border-[#5368ff] bg-gradient-to-br from-[#4367ff] to-[#7a4dff] text-sm font-extrabold text-white"
               >
-                CS
+                {adminPhoto ? (
+                  <img
+                    src={adminPhoto}
+                    alt={`${adminName} admin profile`}
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  adminInitials || "A"
+                )}
               </div>
             </div>
           </header>
@@ -242,10 +305,27 @@ export default function Dashboard() {
                 <StatCard key={stat.label} stat={stat} range={range} />
               ))}
             </div>
+            {dashboardError && (
+              <p className="mt-4 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm font-semibold text-rose-200">
+                {dashboardError}
+              </p>
+            )}
 
             <div className="mt-6 grid gap-6 lg:grid-cols-[2fr_1fr]">
-              <StudentActivityCard range={range} />
-              <CurriculumStatusCard />
+              <StudentActivityCard
+                range={range}
+                points={
+                  range === "7"
+                    ? dashboardData?.insights.student_activity.last_7_days
+                    : dashboardData?.insights.student_activity.last_30_days
+                }
+              />
+              <CurriculumStatusCard
+                overallProgress={
+                  dashboardData?.insights.curriculum_status.overall_progress
+                }
+                subjects={dashboardData?.insights.curriculum_status.subjects}
+              />
             </div>
 
             <SessionTable
@@ -288,6 +368,79 @@ function Brand() {
   );
 }
 
+function readCachedDashboard(): AdminDashboardData | null {
+  if (typeof window === "undefined") return null;
+  const raw = window.sessionStorage.getItem(DASHBOARD_CACHE_KEY);
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw) as { expiresAt: number; data: AdminDashboardData };
+    if (parsed.expiresAt < Date.now()) {
+      window.sessionStorage.removeItem(DASHBOARD_CACHE_KEY);
+      return null;
+    }
+    return parsed.data;
+  } catch {
+    window.sessionStorage.removeItem(DASHBOARD_CACHE_KEY);
+    return null;
+  }
+}
+
+function storeCachedDashboard(data: AdminDashboardData): void {
+  if (typeof window === "undefined") return;
+  window.sessionStorage.setItem(
+    DASHBOARD_CACHE_KEY,
+    JSON.stringify({
+      expiresAt: Date.now() + 20_000,
+      data,
+    }),
+  );
+}
+
+function ChevronDownIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className="h-4 w-4"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="m6 9 6 6 6-6" />
+    </svg>
+  );
+}
+
+function buildStats(data: AdminDashboardData | null) {
+  if (!data) return loadingStats;
+
+  return [
+    {
+      ...loadingStats[0],
+      value: data.metrics.total_students.display,
+      accent: data.metrics.total_students.accent,
+    },
+    {
+      ...loadingStats[1],
+      value: data.metrics.active_ai_sessions.display,
+      accent: data.metrics.active_ai_sessions.accent,
+    },
+    {
+      ...loadingStats[2],
+      value: data.metrics.curriculum_progress.display,
+      accent: data.metrics.curriculum_progress.accent,
+    },
+    {
+      ...loadingStats[3],
+      value: data.metrics.ai_quality_score.display,
+      accent: data.metrics.ai_quality_score.accent,
+    },
+  ];
+}
+
 function RangeButton({
   active,
   onClick,
@@ -316,7 +469,7 @@ function StatCard({
   stat,
   range,
 }: {
-  stat: (typeof stats)[number];
+  stat: (typeof loadingStats)[number];
   range: "7" | "30";
 }) {
   return (
@@ -397,11 +550,35 @@ function StatIcon({ name }: { name: string }) {
   return <span>{name}</span>;
 }
 
-function StudentActivityCard({ range }: { range: "7" | "30" }) {
-  const labels =
+function StudentActivityCard({
+  range,
+  points,
+}: {
+  range: "7" | "30";
+  points?: StudentActivityPoint[];
+}) {
+  const fallback =
     range === "7"
-      ? ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-      : ["W1", "W2", "W3", "W4", "Now"];
+      ? ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((label) => ({
+          label,
+          value: 0,
+        }))
+      : ["W1", "W2", "W3", "W4", "Now"].map((label) => ({ label, value: 0 }));
+  const chartPoints = points?.length ? points : fallback;
+  const maxValue = Math.max(1, ...chartPoints.map((point) => point.value));
+  const coordinates = chartPoints.map((point, index) => {
+    const x =
+      chartPoints.length === 1 ? 320 : (index / (chartPoints.length - 1)) * 640;
+    const y = 205 - (point.value / maxValue) * 165;
+    return { x, y };
+  });
+  const linePath = coordinates
+    .map((point, index) =>
+      `${index === 0 ? "M" : "L"}${point.x.toFixed(1)} ${point.y.toFixed(1)}`,
+    )
+    .join(" ");
+  const areaPath = `${linePath} L640 245 L0 245 Z`;
+  const yAxis = [maxValue, Math.round(maxValue * 0.75), Math.round(maxValue * 0.5), Math.round(maxValue * 0.25)];
 
   return (
     <section className="rounded-xl border border-[#243856] bg-[#0b1324] p-6 shadow-[0_18px_45px_rgba(0,0,0,0.16)]">
@@ -415,10 +592,9 @@ function StudentActivityCard({ range }: { range: "7" | "30" }) {
       <div className="relative h-[255px] overflow-hidden rounded-lg border border-[#243856] bg-[#070b19]">
         <div className="absolute inset-0 bg-[linear-gradient(to_right,rgba(83,104,255,.08)_1px,transparent_1px),linear-gradient(to_bottom,rgba(83,104,255,.08)_1px,transparent_1px)] bg-[size:25%_100%,100%_25%]" />
         <div className="absolute left-4 top-5 flex h-[190px] flex-col justify-between text-xs font-bold text-slate-600">
-          <span>800</span>
-          <span>600</span>
-          <span>400</span>
-          <span>200</span>
+          {yAxis.map((value, index) => (
+            <span key={`${value}-${index}`}>{value}</span>
+          ))}
         </div>
         <svg
           viewBox="0 0 640 245"
@@ -432,35 +608,30 @@ function StudentActivityCard({ range }: { range: "7" | "30" }) {
               <stop offset="100%" stopColor="#7a4dff" stopOpacity="0.05" />
             </linearGradient>
           </defs>
+          <path d={areaPath} fill="url(#lineFill)" />
           <path
-            d="M0 160 C55 126 95 112 140 116 C197 122 206 143 256 126 C302 111 313 42 365 48 C420 53 462 83 490 123 C524 171 554 191 640 180 L640 245 L0 245 Z"
-            fill="url(#lineFill)"
-          />
-          <path
-            d="M0 160 C55 126 95 112 140 116 C197 122 206 143 256 126 C302 111 313 42 365 48 C420 53 462 83 490 123 C524 171 554 191 640 180"
+            d={linePath}
             fill="none"
             stroke="#5368ff"
             strokeLinecap="round"
+            strokeLinejoin="round"
             strokeWidth="4"
           />
-          {[0, 140, 256, 365, 490, 560, 640].map((cx, index) => {
-            const cy = [160, 116, 126, 48, 123, 169, 180][index];
-            return (
-              <circle
-                key={cx}
-                cx={cx}
-                cy={cy}
-                r="5"
-                fill="#5368ff"
-                stroke="#243856"
-                strokeWidth="2"
-              />
-            );
-          })}
+          {coordinates.map((point, index) => (
+            <circle
+              key={`${chartPoints[index].label}-${index}`}
+              cx={point.x}
+              cy={point.y}
+              r="5"
+              fill="#5368ff"
+              stroke="#243856"
+              strokeWidth="2"
+            />
+          ))}
         </svg>
-        <div className="absolute inset-x-10 bottom-3 grid text-xs font-bold text-slate-600" style={{ gridTemplateColumns: `repeat(${labels.length}, minmax(0, 1fr))` }}>
-          {labels.map((label) => (
-            <span key={label}>{label}</span>
+        <div className="absolute inset-x-10 bottom-3 grid text-xs font-bold text-slate-600" style={{ gridTemplateColumns: `repeat(${chartPoints.length}, minmax(0, 1fr))` }}>
+          {chartPoints.map((point, index) => (
+            <span key={`${point.label}-${index}`}>{point.label}</span>
           ))}
         </div>
       </div>
@@ -468,7 +639,17 @@ function StudentActivityCard({ range }: { range: "7" | "30" }) {
   );
 }
 
-function CurriculumStatusCard() {
+function CurriculumStatusCard({
+  overallProgress,
+  subjects,
+}: {
+  overallProgress?: number;
+  subjects?: CurriculumStatusItem[];
+}) {
+  const visibleSubjects = subjects ?? [];
+  const progress = Math.max(0, Math.min(100, overallProgress ?? 0));
+  const conicStops = buildConicGradient(visibleSubjects);
+
   return (
     <section className="rounded-xl border border-[#243856] bg-[#0b1324] p-6 shadow-[0_18px_45px_rgba(0,0,0,0.16)]">
       <div className="mb-5 flex items-center justify-between">
@@ -482,28 +663,50 @@ function CurriculumStatusCard() {
         <div
           className="grid h-48 w-48 place-items-center rounded-full"
           style={{
-            background:
-              "conic-gradient(#5368ff 0 44%, #1fc7e9 44% 76%, #7a4dff 76% 100%)",
+            background: conicStops,
           }}
         >
           <div className="grid h-28 w-28 place-items-center rounded-full border border-[#243856] bg-[#0b1324] text-center">
-            <span className="text-2xl font-extrabold text-white">78%</span>
+            <span className="text-2xl font-extrabold text-white">{progress}%</span>
           </div>
         </div>
         <div className="mt-6 w-full space-y-3">
-          {curriculumHealth.map((item) => (
-            <div key={item.label} className="flex items-center justify-between text-sm">
-              <span className="flex items-center gap-2 font-bold text-slate-400">
-                <i className="h-3 w-3 rounded-sm" style={{ backgroundColor: item.color }} />
-                {item.label}
-              </span>
-              <span className="font-extrabold text-white">{item.value}%</span>
-            </div>
-          ))}
+          {visibleSubjects.length ? (
+            visibleSubjects.map((item) => (
+              <div key={item.subject_id} className="flex items-center justify-between text-sm">
+                <span className="flex items-center gap-2 font-bold text-slate-400">
+                  <i className="h-3 w-3 rounded-sm" style={{ backgroundColor: item.color }} />
+                  {item.label}
+                </span>
+                <span className="font-extrabold text-white">{item.value}%</span>
+              </div>
+            ))
+          ) : (
+            <p className="rounded-lg border border-[#243856] bg-[#101a2b] px-4 py-3 text-center text-sm font-semibold text-slate-500">
+              No curriculum data yet
+            </p>
+          )}
         </div>
       </div>
     </section>
   );
+}
+
+function buildConicGradient(subjects: CurriculumStatusItem[]) {
+  const total = subjects.reduce((sum, item) => sum + Math.max(0, item.value), 0);
+  if (total === 0) {
+    return "conic-gradient(#243856 0 100%)";
+  }
+
+  let cursor = 0;
+  const stops = subjects.map((item) => {
+    const start = cursor;
+    const width = (Math.max(0, item.value) / total) * 100;
+    cursor += width;
+    return `${item.color} ${start.toFixed(1)}% ${cursor.toFixed(1)}%`;
+  });
+
+  return `conic-gradient(${stops.join(", ")})`;
 }
 
 function SessionTable({
@@ -566,39 +769,50 @@ function SessionTable({
             </tr>
           </thead>
           <tbody className="divide-y divide-[#243856]">
-            {sessions.map((session) => (
-              <tr
-                key={session.id}
-                className="text-sm transition hover:bg-[#101a2b]/55"
-              >
-                <td className="px-6 py-5 font-bold text-[#1fc7e9]">{session.id}</td>
-                <td className="px-6 py-5">
-                  <p className="font-bold text-white">{session.name}</p>
-                  <p className="mt-1 text-xs text-slate-500">{session.time}</p>
-                </td>
-                <td className="px-6 py-5 font-semibold text-slate-300">
-                  {session.subject}
-                </td>
-                <td className="px-6 py-5 font-semibold text-slate-300">
-                  {session.grade}
-                </td>
-                <td className="max-w-xs px-6 py-5 leading-6 text-slate-500">
-                  {session.reason}
-                </td>
-                <td className="px-6 py-5">
-                  <SessionStatusPill status={session.status} />
-                </td>
-                <td className="px-6 py-5 text-right">
-                  <button
-                    type="button"
-                    onClick={() => onOpen(session)}
-                    className="inline-flex h-9 items-center rounded-lg border border-[#243856] bg-[#101a2b] px-4 text-sm font-bold text-slate-300 transition hover:border-[#5368ff] hover:text-white"
-                  >
-                    Open
-                  </button>
+            {sessions.length ? (
+              sessions.map((session) => (
+                <tr
+                  key={session.id}
+                  className="text-sm transition hover:bg-[#101a2b]/55"
+                >
+                  <td className="px-6 py-5 font-bold text-[#1fc7e9]">{session.id}</td>
+                  <td className="px-6 py-5">
+                    <p className="font-bold text-white">{session.name}</p>
+                    <p className="mt-1 text-xs text-slate-500">{session.time}</p>
+                  </td>
+                  <td className="px-6 py-5 font-semibold text-slate-300">
+                    {session.subject}
+                  </td>
+                  <td className="px-6 py-5 font-semibold text-slate-300">
+                    {session.grade}
+                  </td>
+                  <td className="max-w-xs px-6 py-5 leading-6 text-slate-500">
+                    {session.reason}
+                  </td>
+                  <td className="px-6 py-5">
+                    <SessionStatusPill status={session.status} />
+                  </td>
+                  <td className="px-6 py-5 text-right">
+                    <button
+                      type="button"
+                      onClick={() => onOpen(session)}
+                      className="inline-flex h-9 items-center rounded-lg border border-[#243856] bg-[#101a2b] px-4 text-sm font-bold text-slate-300 transition hover:border-[#5368ff] hover:text-white"
+                    >
+                      Open
+                    </button>
+                  </td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td
+                  colSpan={7}
+                  className="px-6 py-10 text-center text-sm font-semibold text-slate-500"
+                >
+                  No flagged AI sessions yet
                 </td>
               </tr>
-            ))}
+            )}
           </tbody>
         </table>
       </div>
@@ -633,28 +847,13 @@ function SessionTable({
   );
 }
 
-function NotificationsPanel({ onClose }: { onClose: () => void }) {
-  const notifications = [
-    {
-      title: "AI review queue",
-      body: "3 sessions need admin attention",
-      time: "8 min ago",
-      tone: "amber",
-    },
-    {
-      title: "Student risk alert",
-      body: "Dara Sok dropped below 45% progress",
-      time: "24 min ago",
-      tone: "rose",
-    },
-    {
-      title: "Curriculum update",
-      body: "Grade 12 Physics content was updated",
-      time: "1 hour ago",
-      tone: "blue",
-    },
-  ];
-
+function NotificationsPanel({
+  notifications,
+  onClose,
+}: {
+  notifications: DashboardNotification[];
+  onClose: () => void;
+}) {
   return (
     <div className="absolute right-20 top-14 z-30 w-[344px] overflow-hidden rounded-xl border border-[#243856] bg-[#0b1324] text-left shadow-[0_18px_45px_rgba(0,0,0,0.32)]">
       <div className="flex items-center justify-between border-b border-[#243856] px-5 py-4">
@@ -674,34 +873,40 @@ function NotificationsPanel({ onClose }: { onClose: () => void }) {
         </button>
       </div>
       <div className="divide-y divide-[#243856]">
-        {notifications.map((item) => (
-          <button
-            key={item.title}
-            type="button"
-            className="flex w-full gap-3 px-5 py-4 text-left transition hover:bg-[#101a2b]"
-          >
-            <span
-              className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${
-                item.tone === "amber"
-                  ? "bg-amber-300"
-                  : item.tone === "rose"
-                    ? "bg-rose-300"
-                    : "bg-[#5368ff]"
-              }`}
-            />
-            <span className="min-w-0">
-              <span className="block text-sm font-bold text-slate-100">
-                {item.title}
+        {notifications.length ? (
+          notifications.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className="flex w-full gap-3 px-5 py-4 text-left transition hover:bg-[#101a2b]"
+            >
+              <span
+                className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${
+                  item.tone === "amber"
+                    ? "bg-amber-300"
+                    : item.tone === "rose"
+                      ? "bg-rose-300"
+                      : "bg-[#5368ff]"
+                }`}
+              />
+              <span className="min-w-0">
+                <span className="block text-sm font-bold text-slate-100">
+                  {item.title}
+                </span>
+                <span className="mt-1 block text-xs font-semibold leading-5 text-slate-500">
+                  {item.body}
+                </span>
+                <span className="mt-1 block text-[11px] font-bold text-[#7da6e6]">
+                  {item.time}
+                </span>
               </span>
-              <span className="mt-1 block text-xs font-semibold leading-5 text-slate-500">
-                {item.body}
-              </span>
-              <span className="mt-1 block text-[11px] font-bold text-[#7da6e6]">
-                {item.time}
-              </span>
-            </span>
-          </button>
-        ))}
+            </button>
+          ))
+        ) : (
+          <p className="px-5 py-6 text-center text-sm font-semibold text-slate-500">
+            No notifications yet
+          </p>
+        )}
       </div>
     </div>
   );

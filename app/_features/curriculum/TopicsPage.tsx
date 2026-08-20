@@ -1,9 +1,23 @@
 "use client";
 
-import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
+import { useRouter } from "next/navigation";
+import {
+  clearAdminSession,
+  getAccessToken,
+  loadAdminGrades,
+  loadAdminSubjects,
+  type AdminGradeLevel,
+  type AdminSubject,
+} from "../auth/adminAuth";
 import { ActionButtons } from "./components/ActionButtons";
 import { CurriculumShell } from "./CurriculumShell";
-import { grades as gradeRows } from "./data";
 import { Drawer, StatusPill } from "./Shared";
 
 const topics = [
@@ -48,12 +62,6 @@ const topics = [
   },
 ];
 
-const gradeOptions = gradeRows.map((grade) => grade.name);
-const subjectsByGrade: Record<string, readonly string[]> = {
-  "Grade 12": ["Physics", "Chemistry", "Math"],
-  "Grade 11": ["Math", "Physics", "Chemistry"],
-  "Grade 10": ["Math", "Chemistry", "Physics"],
-};
 const difficulties = ["All Levels", "Beginner", "Intermediate", "Advanced"] as const;
 
 const difficultyClasses: Record<string, string> = {
@@ -68,16 +76,69 @@ type TopicDrawerState =
   | { mode: "edit" | "duplicate"; topic: Topic };
 
 export function TopicsPage() {
+  const router = useRouter();
   const [topicRows, setTopicRows] = useState<Topic[]>(topics);
   const [drawerState, setDrawerState] = useState<TopicDrawerState | null>(null);
-  const [selectedGrade, setSelectedGrade] = useState("Grade 12");
-  const [selectedSubject, setSelectedSubject] = useState("Physics");
+  const [grades, setGrades] = useState<AdminGradeLevel[]>([]);
+  const [subjects, setSubjects] = useState<AdminSubject[]>([]);
+  const [selectedGrade, setSelectedGrade] = useState("");
+  const [selectedSubject, setSelectedSubject] = useState("");
   const [difficultyFilter, setDifficultyFilter] =
     useState<(typeof difficulties)[number]>("All Levels");
   const [page, setPage] = useState(1);
 
-  const subjectOptions =
-    subjectsByGrade[selectedGrade] ?? [];
+  useEffect(() => {
+    if (!getAccessToken()) {
+      router.replace("/auth/Login");
+      return;
+    }
+
+    let isMounted = true;
+    Promise.all([loadAdminGrades(), loadAdminSubjects()])
+      .then(([loadedGrades, loadedSubjects]) => {
+        if (!isMounted) return;
+        setGrades(loadedGrades);
+        setSubjects(loadedSubjects.filter((subject) => subject.status !== "Inactive"));
+      })
+      .catch((loadError) => {
+        if (
+          loadError instanceof Error &&
+          (loadError.message.includes("Admin session") ||
+            loadError.message.includes("Invalid or expired authentication token") ||
+            loadError.message.includes("Admin access is required"))
+        ) {
+          clearAdminSession();
+          router.replace("/auth/Login");
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [router]);
+
+  const gradeOptions = useMemo(() => grades.map((grade) => grade.name), [grades]);
+  const subjectsByGrade = useMemo(() => {
+    return subjects.reduce<Record<string, string[]>>((groupedSubjects, subject) => {
+      if (!groupedSubjects[subject.grade]) groupedSubjects[subject.grade] = [];
+      if (!groupedSubjects[subject.grade].includes(subject.name)) {
+        groupedSubjects[subject.grade].push(subject.name);
+      }
+      return groupedSubjects;
+    }, {});
+  }, [subjects]);
+  const subjectOptions = subjectsByGrade[selectedGrade] ?? [];
+
+  useEffect(() => {
+    if (!selectedGrade && gradeOptions.length) {
+      setSelectedGrade(gradeOptions[0]);
+      return;
+    }
+
+    if (selectedGrade && subjectOptions.length && !subjectOptions.includes(selectedSubject)) {
+      setSelectedSubject(subjectOptions[0]);
+    }
+  }, [gradeOptions, selectedGrade, selectedSubject, subjectOptions]);
 
   const filteredTopics = useMemo(
     () =>
@@ -125,6 +186,7 @@ export function TopicsPage() {
       <TopicFilters
         selectedGrade={selectedGrade}
         selectedSubject={selectedSubject}
+        gradeOptions={gradeOptions}
         subjectOptions={subjectOptions}
         difficultyFilter={difficultyFilter}
         onSubjectChange={(value) => {
@@ -172,6 +234,7 @@ export function TopicsPage() {
 function TopicFilters({
   selectedGrade,
   selectedSubject,
+  gradeOptions,
   subjectOptions,
   difficultyFilter,
   onSubjectChange,
@@ -180,6 +243,7 @@ function TopicFilters({
 }: {
   selectedGrade: string;
   selectedSubject: string;
+  gradeOptions: readonly string[];
   subjectOptions: readonly string[];
   difficultyFilter: (typeof difficulties)[number];
   onSubjectChange: (value: string) => void;

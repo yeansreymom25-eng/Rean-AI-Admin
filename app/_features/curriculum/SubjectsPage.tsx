@@ -1,69 +1,159 @@
 "use client";
 
-import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
+import {
+  clearAdminSession,
+  createAdminSubject,
+  getAccessToken,
+  loadAdminGrades,
+  loadAdminSubjects,
+  updateAdminSubject,
+  type AdminGradeLevel,
+  type AdminSubject,
+  type AdminSubjectInput,
+  type AdminSubjectStatus,
+} from "../auth/adminAuth";
 import { CurriculumShell } from "./CurriculumShell";
-import { grades, subjects } from "./data";
 import { ActionButtons } from "./components/ActionButtons";
 import { IconUploadField } from "./components/IconUploadField";
-import {
-  Drawer,
-  StatusPill,
-} from "./Shared";
+import { Drawer, StatusPill } from "./Shared";
 
-type Subject = (typeof subjects)[number] & {
-  grade: string;
-};
+type Subject = AdminSubject;
 type SubjectDrawerState =
   | { mode: "add"; subject?: undefined }
   | { mode: "edit" | "duplicate"; subject: Subject };
 
-const gradeOptions = grades.map((grade) => grade.name);
-
-const initialSubjects: Subject[] = [
-  { ...subjects[0], grade: "Grade 12" },
-  { ...subjects[1], grade: "Grade 12" },
-  { ...subjects[2], grade: "Grade 11" },
-];
+function isAuthExpiredError(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  return (
+    error.message.includes("Admin session") ||
+    error.message.includes("Invalid or expired authentication token") ||
+    error.message.includes("Admin access is required")
+  );
+}
 
 export function SubjectsPage() {
-  const [subjectRows, setSubjectRows] = useState<Subject[]>(initialSubjects);
+  const router = useRouter();
+  const [grades, setGrades] = useState<AdminGradeLevel[]>([]);
+  const [subjectRows, setSubjectRows] = useState<Subject[]>([]);
   const [drawerState, setDrawerState] = useState<SubjectDrawerState | null>(null);
-  const [selectedGrade, setSelectedGrade] = useState("Grade 12");
+  const [selectedGradeId, setSelectedGradeId] = useState("");
+  const [search, setSearch] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
 
-  const visibleSubjects = useMemo(
-    () =>
-      subjectRows.filter(
-        (subject) => subject.grade === selectedGrade,
-      ),
-    [selectedGrade, subjectRows],
-  );
+  useEffect(() => {
+    if (!getAccessToken()) {
+      router.replace("/auth/Login");
+      return;
+    }
 
-  function deactivateSubject(code: string) {
-    setSubjectRows((currentSubjects) =>
-      currentSubjects.map((subject) =>
-        subject.code === code && subject.grade === selectedGrade
-          ? { ...subject, status: "Inactive" }
-          : subject,
-      ),
-    );
-  }
+    loadGrades();
+  }, [router]);
 
-  function saveSubject(subject: Subject) {
-    setSubjectRows((currentSubjects) => {
-      if (drawerState?.mode === "edit") {
-        return currentSubjects.map((currentSubject) =>
-          currentSubject.code === drawerState.subject.code &&
-          currentSubject.grade === drawerState.subject.grade
-            ? subject
-            : currentSubject,
-        );
+  useEffect(() => {
+    if (selectedGradeId) {
+      loadSubjectsForGrade(selectedGradeId);
+    }
+  }, [selectedGradeId]);
+
+  async function loadGrades() {
+    setIsLoading(true);
+    setError("");
+    try {
+      const loadedGrades = await loadAdminGrades();
+      setGrades(loadedGrades);
+      setSelectedGradeId((current) => current || loadedGrades[0]?.grade_level_id || "");
+      if (!loadedGrades.length) {
+        setSubjectRows([]);
       }
-
-      return [subject, ...currentSubjects];
-    });
-
-    setDrawerState(null);
+    } catch (loadError) {
+      if (isAuthExpiredError(loadError)) {
+        clearAdminSession();
+        router.replace("/auth/Login");
+        return;
+      }
+      setError(loadError instanceof Error ? loadError.message : "Unable to load grades");
+    } finally {
+      setIsLoading(false);
+    }
   }
+
+  async function loadSubjectsForGrade(gradeLevelId: string) {
+    setIsLoading(true);
+    setError("");
+    try {
+      setSubjectRows(await loadAdminSubjects(gradeLevelId));
+    } catch (loadError) {
+      if (isAuthExpiredError(loadError)) {
+        clearAdminSession();
+        router.replace("/auth/Login");
+        return;
+      }
+      setError(loadError instanceof Error ? loadError.message : "Unable to load subjects");
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  async function saveSubject(input: AdminSubjectInput) {
+    if (!drawerState) return;
+
+    setError("");
+    setMessage("");
+    const savedSubject =
+      drawerState.mode === "edit"
+        ? await updateAdminSubject(drawerState.subject.subject_id, input)
+        : await createAdminSubject(input);
+
+    setSubjectRows((currentSubjects) => {
+      const withoutSaved = currentSubjects.filter(
+        (subject) => subject.subject_id !== savedSubject.subject_id,
+      );
+      return [...withoutSaved, savedSubject].sort(
+        (left, right) => Number(left.order) - Number(right.order) || left.name.localeCompare(right.name),
+      );
+    });
+    setDrawerState(null);
+    setMessage(drawerState.mode === "edit" ? "Subject updated successfully." : "Subject added successfully.");
+  }
+
+  async function deactivateSubject(subject: Subject) {
+    setError("");
+    setMessage("");
+    try {
+      const updatedSubject = await updateAdminSubject(subject.subject_id, {
+        status: "Inactive",
+      });
+      setSubjectRows((currentSubjects) =>
+        currentSubjects.map((item) =>
+          item.subject_id === updatedSubject.subject_id ? updatedSubject : item,
+        ),
+      );
+      setMessage("Subject set to inactive.");
+    } catch (updateError) {
+      if (isAuthExpiredError(updateError)) {
+        clearAdminSession();
+        router.replace("/auth/Login");
+        return;
+      }
+      setError(updateError instanceof Error ? updateError.message : "Unable to update subject");
+    }
+  }
+
+  const selectedGrade = grades.find((grade) => grade.grade_level_id === selectedGradeId);
+  const visibleSubjects = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return subjectRows;
+    return subjectRows.filter((subject) =>
+      [subject.name, subject.khmer, subject.code, subject.description, subject.status]
+        .join(" ")
+        .toLowerCase()
+        .includes(query),
+    );
+  }, [search, subjectRows]);
 
   return (
     <CurriculumShell
@@ -71,16 +161,32 @@ export function SubjectsPage() {
       title="Subjects"
       subtitle="Choose a grade first, then add or manage subjects inside that grade."
       searchPlaceholder="Search subjects..."
+      searchValue={search}
+      onSearchChange={setSearch}
       actionLabel="Add Subject"
       onAction={() => setDrawerState({ mode: "add" })}
     >
+      {message && (
+        <p className="mb-4 rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm font-semibold text-emerald-200">
+          {message}
+        </p>
+      )}
+      {error && (
+        <p className="mb-4 rounded-lg border border-rose-400/30 bg-rose-400/10 px-4 py-3 text-sm font-semibold text-rose-200">
+          {error}
+        </p>
+      )}
       <GradeContextBar
-        value={selectedGrade}
-        options={gradeOptions}
-        onChange={setSelectedGrade}
+        value={selectedGradeId}
+        options={grades}
+        onChange={(gradeId) => {
+          setSelectedGradeId(gradeId);
+          setSearch("");
+        }}
       />
       <SubjectTable
         subjects={visibleSubjects}
+        isLoading={isLoading}
         onEdit={(subject) => setDrawerState({ mode: "edit", subject })}
         onDuplicate={(subject) => setDrawerState({ mode: "duplicate", subject })}
         onDeactivate={deactivateSubject}
@@ -103,7 +209,7 @@ function GradeContextBar({
   onChange,
 }: {
   value: string;
-  options: readonly string[];
+  options: AdminGradeLevel[];
   onChange: (value: string) => void;
 }) {
   return (
@@ -117,9 +223,15 @@ function GradeContextBar({
           onChange={(event) => onChange(event.target.value)}
           className="h-12 w-full rounded-lg border border-[#35507a] bg-[#101a2b] px-4 text-sm font-extrabold text-white outline-none transition focus:border-[#5368ff]"
         >
-          {options.map((option) => (
-            <option key={option}>{option}</option>
-          ))}
+          {options.length ? (
+            options.map((option) => (
+              <option key={option.grade_level_id} value={option.grade_level_id}>
+                {option.name}
+              </option>
+            ))
+          ) : (
+            <option value="">No grades yet</option>
+          )}
         </select>
       </label>
     </section>
@@ -136,12 +248,10 @@ function SubjectSurface({
   return (
     <section className="overflow-hidden rounded-xl border border-[#243856] bg-[#0b1324] shadow-[0_18px_45px_rgba(0,0,0,0.2)]">
       <div className="overflow-x-auto">{children}</div>
-
       <div className="flex items-center justify-between border-t border-[#243856] px-6 py-4">
         <p className="text-xs font-semibold text-slate-600">
           Showing {count} {count === 1 ? "subject" : "subjects"}
         </p>
-
         <span className="rounded-full border border-[#243856] bg-[#101a2b] px-3 py-1 text-[10px] font-extrabold uppercase text-slate-500">
           Grade scoped
         </span>
@@ -150,35 +260,38 @@ function SubjectSurface({
   );
 }
 
-function EmptySubjectsRow() {
+function EmptySubjectsRow({ isLoading }: { isLoading: boolean }) {
   return (
     <tr>
       <td colSpan={8} className="px-6 py-16">
         <div className="mx-auto flex max-w-md flex-col items-center text-center">
           <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-[#35507a] bg-[#101a2b] text-lg font-black text-[#1fc7e9]">
-            +
+            {isLoading ? "..." : "+"}
           </div>
           <p className="mt-4 text-sm font-extrabold text-white">
-            No subjects in this grade yet
+            {isLoading ? "Loading subjects..." : "No subjects in this grade yet"}
           </p>
           <p className="mt-2 text-sm leading-6 text-slate-500">
-            Use Add Subject to create the first subject for the selected grade.
+            {isLoading ? "Fetching backend curriculum data." : "Use Add Subject to create the first subject for the selected grade."}
           </p>
         </div>
       </td>
     </tr>
   );
 }
+
 function SubjectTable({
   subjects,
+  isLoading,
   onEdit,
   onDuplicate,
   onDeactivate,
 }: {
   subjects: Subject[];
+  isLoading: boolean;
   onEdit: (subject: Subject) => void;
   onDuplicate: (subject: Subject) => void;
-  onDeactivate: (code: string) => void;
+  onDeactivate: (subject: Subject) => void;
 }) {
   return (
     <SubjectSurface count={subjects.length}>
@@ -197,10 +310,14 @@ function SubjectTable({
         </thead>
         <tbody className="divide-y divide-[#243856]">
           {subjects.map((subject) => (
-            <tr key={subject.code} className="text-sm transition hover:bg-[#101a2b]/55">
+            <tr key={subject.subject_id} className="text-sm transition hover:bg-[#101a2b]/55">
               <td className="px-6 py-6">
-                <span className="flex h-10 w-10 items-center justify-center rounded-lg border border-[#243856] bg-[#101a2b] text-xs font-extrabold text-[#1fc7e9]">
-                  {subject.icon}
+                <span className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-lg border border-[#243856] bg-[#101a2b] text-xs font-extrabold text-[#1fc7e9]">
+                  {subject.icon?.startsWith("data:image") || subject.icon?.startsWith("http") ? (
+                    <img src={subject.icon} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    subject.icon
+                  )}
                 </span>
               </td>
               <td className="px-6 py-6">
@@ -216,7 +333,7 @@ function SubjectTable({
                 </span>
               </td>
               <td className="max-w-sm px-6 py-6 leading-6 text-slate-500">
-                {subject.description}
+                {subject.description || "No description yet"}
               </td>
               <td className="px-6 py-6 text-center font-bold text-slate-300">
                 {subject.order}
@@ -228,15 +345,13 @@ function SubjectTable({
                 <ActionButtons
                   onEdit={() => onEdit(subject)}
                   onDuplicate={() => onDuplicate(subject)}
-                  onDeactivate={() => onDeactivate(subject.code)}
+                  onDeactivate={() => onDeactivate(subject)}
                   deactivateLabel="Set inactive"
                 />
               </td>
             </tr>
           ))}
-          {subjects.length === 0 && (
-            <EmptySubjectsRow />
-          )}
+          {subjects.length === 0 && <EmptySubjectsRow isLoading={isLoading} />}
         </tbody>
       </table>
     </SubjectSurface>
@@ -250,9 +365,9 @@ function SubjectModal({
   onSave,
 }: {
   state: SubjectDrawerState;
-  selectedGrade: string;
+  selectedGrade?: AdminGradeLevel;
   onClose: () => void;
-  onSave: (subject: Subject) => void;
+  onSave: (subject: AdminSubjectInput) => Promise<void>;
 }) {
   const subject = state.subject;
   const isEditing = state.mode === "edit";
@@ -263,61 +378,68 @@ function SubjectModal({
         ? "Duplicate Subject"
         : "Edit Subject";
   const primaryLabel = isEditing ? "Update Subject" : "Save Subject";
-  const grade =
-    isEditing && subject
-      ? subject.grade
-      : selectedGrade;
+  const [isSaving, setIsSaving] = useState(false);
+  const [localError, setLocalError] = useState("");
+  const gradeLevelId = isEditing && subject ? subject.grade_level_id : selectedGrade?.grade_level_id ?? "";
+  const gradeName = isEditing && subject ? subject.grade : selectedGrade?.name ?? "Select a grade first";
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setLocalError("");
 
     const formData = new FormData(event.currentTarget);
     const name = String(formData.get("name") || "").trim();
     const code = String(formData.get("code") || "").trim();
 
+    if (!gradeLevelId) {
+      setLocalError("Create a grade level before adding subjects.");
+      return;
+    }
     if (!name || !code) {
+      setLocalError("Subject name and code are required.");
       return;
     }
 
-    onSave({
-      grade,
-      name,
-      khmer: subject?.khmer ?? name,
-      code,
-      icon: subject?.icon ?? code.slice(0, 2).toLowerCase(),
-      description: String(formData.get("description") || "").trim(),
-      order: String(formData.get("order") || "1"),
-      status: formData.get("status") ? "Active" : "Draft",
-    });
+    setIsSaving(true);
+    try {
+      await onSave({
+        grade_level_id: gradeLevelId,
+        name,
+        khmer: subject?.khmer ?? name,
+        code,
+        icon: subject?.icon ?? code.slice(0, 2).toLowerCase(),
+        description: String(formData.get("description") || "").trim(),
+        order: String(formData.get("order") || "1"),
+        status: (formData.get("status") ? "Active" : "Draft") as AdminSubjectStatus,
+      });
+    } catch (saveError) {
+      setLocalError(saveError instanceof Error ? saveError.message : "Unable to save subject");
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   return (
     <Drawer title={title} onClose={onClose}>
-      <form
-        onSubmit={handleSubmit}
-        className="flex min-h-0 flex-1 flex-col overflow-y-auto"
-      >
+      <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         <div className="space-y-5 p-6">
-          <ReadOnlyField label="Grade Level" value={grade} />
+          {localError && (
+            <p className="rounded-lg border border-rose-400/30 bg-rose-400/10 px-4 py-3 text-sm font-semibold text-rose-200">
+              {localError}
+            </p>
+          )}
+          <ReadOnlyField label="Grade Level" value={gradeName} />
           <NamedField
             name="name"
             label="Subject Name"
             placeholder="e.g. Physics"
-            defaultValue={
-              state.mode === "duplicate" && subject
-                ? `${subject.name} Copy`
-                : subject?.name
-            }
+            defaultValue={state.mode === "duplicate" && subject ? `${subject.name} Copy` : subject?.name}
           />
           <NamedField
             name="code"
             label="Subject Code"
             placeholder="e.g. PHYS"
-            defaultValue={
-              state.mode === "duplicate" && subject
-                ? `${subject.code}_COPY`
-                : subject?.code
-            }
+            defaultValue={state.mode === "duplicate" && subject ? `${subject.code}_COPY` : subject?.code}
           />
           <IconUploadField />
           <NamedTextArea
@@ -332,9 +454,9 @@ function SubjectModal({
             placeholder="1"
             defaultValue={subject?.order}
           />
-          <NamedStatusToggle defaultChecked={subject?.status !== "Draft"} />
+          <NamedStatusToggle defaultChecked={subject?.status !== "Draft" && subject?.status !== "Inactive"} />
         </div>
-        <FormDrawerActions primaryLabel={primaryLabel} onClose={onClose} />
+        <FormDrawerActions primaryLabel={isSaving ? "Saving..." : primaryLabel} onClose={onClose} disabled={isSaving} />
       </form>
     </Drawer>
   );
@@ -427,9 +549,11 @@ function NamedStatusToggle({ defaultChecked }: { defaultChecked: boolean }) {
 function FormDrawerActions({
   primaryLabel,
   onClose,
+  disabled,
 }: {
   primaryLabel: string;
   onClose: () => void;
+  disabled?: boolean;
 }) {
   return (
     <div className="mt-auto grid grid-cols-2 gap-3 border-t border-[#243856] p-6">
@@ -442,7 +566,8 @@ function FormDrawerActions({
       </button>
       <button
         type="submit"
-        className="h-12 rounded-lg bg-gradient-to-r from-[#4367ff] to-[#7a4dff] text-sm font-bold text-white shadow-lg shadow-blue-950/30 transition hover:brightness-110"
+        disabled={disabled}
+        className="h-12 rounded-lg bg-gradient-to-r from-[#4367ff] to-[#7a4dff] text-sm font-bold text-white shadow-lg shadow-blue-950/30 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
       >
         {primaryLabel}
       </button>

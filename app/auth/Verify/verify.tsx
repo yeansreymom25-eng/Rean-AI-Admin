@@ -1,7 +1,41 @@
+"use client";
+
 import Link from "next/link";
-import { AuthShell, PrimaryButton } from "../AuthShell";
+import { useRouter } from "next/navigation";
+import { FormEvent, useEffect, useState } from "react";
+import { confirmAdminPasswordReset } from "../../_features/auth/adminAuth";
+import { AuthShell, Field, PrimaryButton } from "../AuthShell";
 
 export default function VerifyPage() {
+  const router = useRouter();
+  const [token, setToken] = useState("");
+  const [password, setPassword] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    const storedToken = window.sessionStorage.getItem("rean_admin_reset_token");
+    if (storedToken) {
+      setToken(storedToken);
+    }
+  }, []);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setErrorMessage("");
+    setIsSubmitting(true);
+
+    try {
+      await confirmAdminPasswordReset(token, password);
+      window.sessionStorage.removeItem("rean_admin_reset_token");
+      router.push("/auth/Login");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Unable to reset password");
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
   return (
     <AuthShell
       title="Verify your email"
@@ -13,25 +47,34 @@ export default function VerifyPage() {
         </>
       }
     >
-      <form action="/admin_dashboard" method="get" className="space-y-6">
-        <div>
-          <span className="mb-2 block text-xs font-bold uppercase text-slate-500">
-            Verification code
-          </span>
-          <div className="grid grid-cols-6 gap-2">
-            {Array.from({ length: 6 }).map((_, index) => (
-              <input
-                key={index}
-                inputMode="numeric"
-                maxLength={1}
-                aria-label={`Digit ${index + 1}`}
-                className="h-12 rounded-lg border border-[#35507a] bg-black text-center text-lg font-extrabold text-white outline-none transition focus:border-[#5368ff]"
-              />
-            ))}
-          </div>
-        </div>
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <Field
+          label="Verification token"
+          name="token"
+          placeholder="Paste reset token"
+          value={token}
+          onChange={(event) => setToken(event.target.value)}
+          required
+          autoComplete="one-time-code"
+        />
+        <Field
+          label="New password"
+          name="password"
+          type="password"
+          placeholder="Create new password"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          required
+          autoComplete="new-password"
+        />
 
-        <PrimaryButton type="submit">Verify account</PrimaryButton>
+        {errorMessage && (
+          <p className="text-sm font-semibold text-rose-300">{errorMessage}</p>
+        )}
+
+        <PrimaryButton type="submit" disabled={isSubmitting}>
+          {isSubmitting ? "Resetting..." : "Reset password"}
+        </PrimaryButton>
       </form>
 
       <div className="mt-5 text-center">

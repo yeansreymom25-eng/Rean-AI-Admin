@@ -1,69 +1,72 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AdminShell } from "../_features/admin/AdminShell";
-
-const students = [
-  {
-    id: "STU-1042",
-    name: "Sopheak Mith",
-    grade: "Grade 10",
-    focus: "Physics",
-    progress: 74,
-    sessions: 18,
-    status: "Active",
-    lastSeen: "8 min ago",
-  },
-  {
-    id: "STU-1087",
-    name: "Vanna Rak",
-    grade: "Grade 11",
-    focus: "Math",
-    progress: 61,
-    sessions: 25,
-    status: "Needs Review",
-    lastSeen: "16 min ago",
-  },
-  {
-    id: "STU-1131",
-    name: "Leakena Chan",
-    grade: "Grade 12",
-    focus: "Chemistry",
-    progress: 88,
-    sessions: 31,
-    status: "Active",
-    lastSeen: "1 hour ago",
-  },
-  {
-    id: "STU-1164",
-    name: "Dara Sok",
-    grade: "Grade 10",
-    focus: "Physics",
-    progress: 43,
-    sessions: 9,
-    status: "At Risk",
-    lastSeen: "Yesterday",
-  },
-];
+import {
+  clearAdminSession,
+  type AdminStudent,
+  type AdminStudentsData,
+  getAccessToken,
+  loadAdminStudents,
+} from "../_features/auth/adminAuth";
+import { useRouter } from "next/navigation";
 
 const grades = ["All Grades", "Grade 10", "Grade 11", "Grade 12"] as const;
 const statuses = ["All Status", "Active", "Needs Review", "At Risk"] as const;
 
-type Student = (typeof students)[number];
+type Student = AdminStudent;
+
+function isAuthExpiredError(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  return (
+    error.message.includes("Admin session") ||
+    error.message.includes("Invalid or expired authentication token") ||
+    error.message.includes("Admin access is required")
+  );
+}
 
 export default function StudentsPage() {
-  const [gradeFilter, setGradeFilter] = useState<(typeof grades)[number]>("All Grades");
-  const [statusFilter, setStatusFilter] =
-    useState<(typeof statuses)[number]>("All Status");
+  const router = useRouter();
+  const [gradeFilter, setGradeFilter] = useState("All Grades");
+  const [statusFilter, setStatusFilter] = useState("All Status");
+  const [search, setSearch] = useState("");
+  const [studentsData, setStudentsData] = useState<AdminStudentsData | null>(null);
+  const [studentsError, setStudentsError] = useState("");
+
+  useEffect(() => {
+    if (!getAccessToken()) {
+      router.replace("/auth/Login");
+      return;
+    }
+
+    loadAdminStudents()
+      .then((data) => {
+        setStudentsData(data);
+        setStudentsError("");
+      })
+      .catch((error) => {
+        if (isAuthExpiredError(error)) {
+          clearAdminSession();
+          router.replace("/auth/Login");
+          return;
+        }
+        setStudentsError(error instanceof Error ? error.message : "Unable to load students");
+      });
+  }, [router]);
+
+  const students = studentsData?.students ?? [];
+  const gradeOptions = studentsData?.filters.grades.length ? studentsData.filters.grades : [...grades];
+  const statusOptions = studentsData?.filters.statuses.length ? studentsData.filters.statuses : [...statuses];
 
   const filteredStudents = useMemo(
     () =>
       students.filter(
         (student) =>
           (gradeFilter === "All Grades" || student.grade === gradeFilter) &&
-          (statusFilter === "All Status" || student.status === statusFilter),
+          (statusFilter === "All Status" || student.status === statusFilter) &&
+          (`${student.name} ${student.id}`.toLowerCase().includes(search.trim().toLowerCase())),
       ),
-    [gradeFilter, statusFilter],
+    [gradeFilter, statusFilter, search, students],
   );
 
   return (
@@ -73,11 +76,35 @@ export default function StudentsPage() {
       subtitle="Monitor and manage students who are using the app."
     >
       <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="Total Students" value="1,240" accent="+12% this month" />
-        <MetricCard label="Active Today" value="326" accent="Live engagement" tone="cyan" />
-        <MetricCard label="Avg. Progress" value="78%" accent="Across grades" tone="violet" />
-        <MetricCard label="Need Review" value="24" accent="Teacher follow-up" tone="amber" />
+        <MetricCard
+          label="Total Students"
+          value={studentsData?.metrics.total_students.display ?? "0"}
+          accent={studentsData?.metrics.total_students.accent ?? "No learners"}
+        />
+        <MetricCard
+          label="Active Today"
+          value={studentsData?.metrics.active_today.display ?? "0"}
+          accent={studentsData?.metrics.active_today.accent ?? "No activity today"}
+          tone="cyan"
+        />
+        <MetricCard
+          label="Avg. Progress"
+          value={studentsData?.metrics.average_progress.display ?? "0%"}
+          accent={studentsData?.metrics.average_progress.accent ?? "No progress yet"}
+          tone="violet"
+        />
+        <MetricCard
+          label="Need Review"
+          value={studentsData?.metrics.need_review.display ?? "0"}
+          accent={studentsData?.metrics.need_review.accent ?? "No follow-up needed"}
+          tone="amber"
+        />
       </div>
+      {studentsError && (
+        <p className="mt-4 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm font-semibold text-rose-200">
+          {studentsError}
+        </p>
+      )}
 
       <section className="mt-6 rounded-xl border border-[#243856] bg-[#0b1324] p-5 shadow-[0_18px_45px_rgba(0,0,0,0.16)]">
         <div className="grid gap-4 md:grid-cols-[1fr_220px_220px]">
@@ -91,6 +118,8 @@ export default function StudentsPage() {
               </span>
               <input
                 placeholder="Search by name or student ID..."
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
                 className="h-12 w-full rounded-lg border border-[#3b5d8f] bg-[#101a2b] pl-11 pr-4 text-sm font-medium text-slate-100 outline-none transition placeholder:text-slate-400/70 focus:border-[#6f7cff] focus:ring-2 focus:ring-[#5368ff]/20"
               />
             </div>
@@ -98,16 +127,14 @@ export default function StudentsPage() {
           <SelectField
             label="Grade"
             value={gradeFilter}
-            options={grades}
-            onChange={(value) => setGradeFilter(value as (typeof grades)[number])}
+            options={gradeOptions}
+            onChange={setGradeFilter}
           />
           <SelectField
             label="Status"
             value={statusFilter}
-            options={statuses}
-            onChange={(value) =>
-              setStatusFilter(value as (typeof statuses)[number])
-            }
+            options={statusOptions}
+            onChange={setStatusFilter}
           />
         </div>
       </section>
@@ -196,7 +223,8 @@ function StudentTable({ students }: { students: Student[] }) {
             </tr>
           </thead>
           <tbody className="divide-y divide-[#243856]">
-            {students.map((student) => (
+            {students.length ? (
+              students.map((student) => (
               <tr key={student.id} className="text-sm transition hover:bg-[#101a2b]/55">
                 <td className="px-6 py-5">
                   <p className="font-bold text-white">{student.name}</p>
@@ -234,7 +262,17 @@ function StudentTable({ students }: { students: Student[] }) {
                   </div>
                 </td>
               </tr>
-            ))}
+              ))
+            ) : (
+              <tr>
+                <td
+                  colSpan={7}
+                  className="px-6 py-10 text-center text-sm font-semibold text-slate-500"
+                >
+                  No students found
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>

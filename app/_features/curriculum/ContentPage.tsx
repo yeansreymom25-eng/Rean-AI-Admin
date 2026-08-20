@@ -7,7 +7,24 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
+import { useRouter } from "next/navigation";
 
+import {
+  clearAdminSession,
+  createAdminCurriculumContent,
+  deleteAdminCurriculumContent,
+  getAccessToken,
+  loadAdminCurriculumContent,
+  loadAdminGrades,
+  loadAdminSubjects,
+  loadAdminTopics,
+  updateAdminCurriculumContent,
+  type AdminCurriculumContent,
+  type AdminCurriculumContentInput,
+  type AdminCurriculumTopic,
+  type AdminGradeLevel,
+  type AdminSubject,
+} from "../auth/adminAuth";
 import { CurriculumShell } from "./CurriculumShell";
 import { Drawer } from "./Shared";
 
@@ -51,6 +68,16 @@ type Formula = {
 
   prerequisites: string[];
   tags: string[];
+};
+
+type CurriculumSubjectOption = {
+  name: string;
+  lessons: string[];
+};
+
+type CurriculumOption = {
+  grade: string;
+  subjects: CurriculumSubjectOption[];
 };
 
 type FormulaDrawerState =
@@ -105,246 +132,14 @@ const tabs = [
 
 type ContentTab = (typeof tabs)[number];
 
-const curriculumOptions = [
-  {
-    grade: "Grade 12",
-    subjects: [
-      {
-        name: "Physics",
-        lessons: [
-          "Newton's Second Law",
-          "Momentum and Impulse",
-          "Work and Energy",
-        ],
-      },
-      {
-        name: "Chemistry",
-        lessons: [
-          "Balancing Equations",
-          "Reaction Rates",
-          "Acids and Bases",
-        ],
-      },
-    ],
-  },
-  {
-    grade: "Grade 11",
-    subjects: [
-      {
-        name: "Math",
-        lessons: [
-          "Quadratic Equations",
-          "Trigonometric Functions",
-          "Sequences",
-        ],
-      },
-      {
-        name: "Physics",
-        lessons: [
-          "Vectors",
-          "Linear Motion",
-          "Forces",
-        ],
-      },
-    ],
-  },
-  {
-    grade: "Grade 10",
-    subjects: [
-      {
-        name: "Math",
-        lessons: [
-          "Linear Equations",
-          "Geometry Basics",
-          "Statistics",
-        ],
-      },
-      {
-        name: "Chemistry",
-        lessons: [
-          "Atoms and Molecules",
-          "Chemical Bonds",
-          "Mixtures",
-        ],
-      },
-    ],
-  },
-] as const;
-
-/* =========================================================
-   SAMPLE DATA
-========================================================= */
-
-const initialFormulas: Formula[] = [
-  {
-    id: "formula-1",
-    grade: "Grade 12",
-    subject: "Physics",
-    lesson: "Newton's Second Law",
-    expression: "F = ma",
-    description: "Fundamental Principle of Dynamics",
-    status: "Published",
-
-    variables: [
-      {
-        id: "variable-1",
-        symbol: "F",
-        meaning: "Force",
-        unit: "N",
-      },
-      {
-        id: "variable-2",
-        symbol: "m",
-        meaning: "Mass",
-        unit: "kg",
-      },
-      {
-        id: "variable-3",
-        symbol: "a",
-        meaning: "Acceleration",
-        unit: "m/s²",
-      },
-    ],
-
-    steps: [
-      {
-        id: "step-1",
-        text: "Identify all given forces acting on the object.",
-      },
-      {
-        id: "step-2",
-        text: "Calculate the net force by summing vector components.",
-      },
-    ],
-
-    khmerTerms: [
-      {
-        id: "khmer-1",
-        english: "Force",
-        khmer: "កម្លាំង",
-      },
-      {
-        id: "khmer-2",
-        english: "Mass",
-        khmer: "ម៉ាស",
-      },
-    ],
-
-    prerequisites: ["Vectors"],
-
-    tags: ["Dynamics", "Force"],
-  },
-
-  {
-    id: "formula-2",
-    grade: "Grade 12",
-    subject: "Physics",
-    lesson: "Newton's Second Law",
-    expression: "F_net = Δp / Δt",
-    description: "Rate of Change of Momentum",
-    status: "Draft",
-
-    variables: [
-      {
-        id: "variable-4",
-        symbol: "F_net",
-        meaning: "Net Force",
-        unit: "N",
-      },
-      {
-        id: "variable-5",
-        symbol: "Δp",
-        meaning: "Change in Momentum",
-        unit: "kg·m/s",
-      },
-      {
-        id: "variable-6",
-        symbol: "Δt",
-        meaning: "Time Interval",
-        unit: "s",
-      },
-    ],
-
-    steps: [
-      {
-        id: "step-3",
-        text: "Find the change in momentum.",
-      },
-      {
-        id: "step-4",
-        text: "Divide the momentum change by the elapsed time.",
-      },
-    ],
-
-    khmerTerms: [
-      {
-        id: "khmer-3",
-        english: "Momentum",
-        khmer: "ម៉ូម៉ង់ទុំ",
-      },
-    ],
-
-    prerequisites: ["Momentum"],
-
-    tags: ["Momentum"],
-  },
-];
-
-const initialConcepts: LessonContent[] = [
-  {
-    id: "concept-1",
-    grade: "Grade 12",
-    subject: "Physics",
-    lesson: "Newton's Second Law",
-    title: "Force, Mass, and Acceleration",
-    summary:
-      "Net force changes motion based on the object's mass.",
-    body:
-      "Newton's Second Law explains that acceleration increases when net force increases and decreases when mass increases.",
-    status: "Published",
-    tags: ["Dynamics", "Motion"],
-  },
-];
-
-const initialExamples: LessonContent[] = [
-  {
-    id: "example-1",
-    grade: "Grade 12",
-    subject: "Physics",
-    lesson: "Newton's Second Law",
-    title: "Finding Force From Mass and Acceleration",
-    summary:
-      "A 3 kg object accelerates at 4 m/s^2. Find the net force.",
-    body:
-      "Use F = ma. Substitute m = 3 kg and a = 4 m/s^2, so F = 12 N.",
-    status: "Published",
-    tags: ["Worked Example"],
-  },
-];
-
-const initialExercises: LessonContent[] = [
-  {
-    id: "exercise-1",
-    grade: "Grade 12",
-    subject: "Physics",
-    lesson: "Newton's Second Law",
-    title: "Practice Net Force",
-    summary:
-      "Calculate the force needed to accelerate a 5 kg cart at 2 m/s^2.",
-    body:
-      "Students should identify mass and acceleration, apply F = ma, and give the answer in newtons.",
-    status: "Draft",
-    tags: ["Practice", "Calculation"],
-  },
-];
-
 /* =========================================================
    MAIN PAGE
 ========================================================= */
 
 export function ContentPage() {
+  const router = useRouter();
   const [formulas, setFormulas] =
-    useState<Formula[]>(initialFormulas);
+    useState<Formula[]>([]);
 
   const [drawerState, setDrawerState] =
     useState<FormulaDrawerState | null>(null);
@@ -353,13 +148,13 @@ export function ContentPage() {
     useState<ContentDrawerState | null>(null);
 
   const [concepts, setConcepts] =
-    useState<LessonContent[]>(initialConcepts);
+    useState<LessonContent[]>([]);
 
   const [examples, setExamples] =
-    useState<LessonContent[]>(initialExamples);
+    useState<LessonContent[]>([]);
 
   const [exercises, setExercises] =
-    useState<LessonContent[]>(initialExercises);
+    useState<LessonContent[]>([]);
 
   const [activeTab, setActiveTab] =
     useState<ContentTab>("Formulas");
@@ -375,11 +170,101 @@ export function ContentPage() {
   const [selectedLesson, setSelectedLesson] =
     useState("Newton's Second Law");
 
+  const [grades, setGrades] = useState<AdminGradeLevel[]>([]);
+  const [subjects, setSubjects] = useState<AdminSubject[]>([]);
+  const [topics, setTopics] = useState<AdminCurriculumTopic[]>([]);
+
+  useEffect(() => {
+    if (!getAccessToken()) {
+      router.replace("/auth/Login");
+      return;
+    }
+
+    let isMounted = true;
+    Promise.all([
+      loadAdminGrades(),
+      loadAdminSubjects(),
+      loadAdminTopics(),
+      loadAdminCurriculumContent(),
+    ])
+      .then(([loadedGrades, loadedSubjects, loadedTopics, loadedContent]) => {
+        if (!isMounted) return;
+        setGrades(loadedGrades);
+        setSubjects(loadedSubjects.filter((subject) => subject.status !== "Inactive"));
+        setTopics(loadedTopics.filter((topic) => topic.status !== "Inactive"));
+        setFormulas(
+          loadedContent
+            .filter((content) => content.kind === "Formula")
+            .map(contentToFormula),
+        );
+        setConcepts(
+          loadedContent
+            .filter((content) => content.kind === "Concept")
+            .map(contentToLessonContent),
+        );
+        setExamples(
+          loadedContent
+            .filter((content) => content.kind === "Example")
+            .map(contentToLessonContent),
+        );
+        setExercises(
+          loadedContent
+            .filter((content) => content.kind === "Exercise")
+            .map(contentToLessonContent),
+        );
+      })
+      .catch((loadError) => {
+        if (
+          loadError instanceof Error &&
+          (loadError.message.includes("Admin session") ||
+            loadError.message.includes("Invalid or expired authentication token") ||
+            loadError.message.includes("Admin access is required"))
+        ) {
+          clearAdminSession();
+          router.replace("/auth/Login");
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [router]);
+
+  const curriculumOptions = useMemo(() => {
+    if (!grades.length) return [] as CurriculumOption[];
+
+    return grades.map((grade) => {
+      const gradeSubjects = subjects
+        .filter((subject) => subject.grade_level_id === grade.grade_level_id)
+        .sort((left, right) => Number(left.order) - Number(right.order) || left.name.localeCompare(right.name))
+        .map((subject) => {
+          const subjectTopics = topics
+            .filter((topic) => topic.subject_id === subject.subject_id)
+            .map((topic) => topic.name);
+
+          return {
+            name: subject.name,
+            lessons: subjectTopics.length ? subjectTopics : ["No topics yet"],
+          };
+        });
+
+      return {
+        grade: grade.name,
+        subjects: gradeSubjects.length
+          ? gradeSubjects
+          : [{ name: "No subjects yet", lessons: ["No topics yet"] }],
+      };
+    });
+  }, [grades, subjects, topics]);
+
   const selectedGradeOption =
     curriculumOptions.find(
       (option) =>
         option.grade === selectedGrade,
-    ) ?? curriculumOptions[0];
+    ) ?? curriculumOptions[0] ?? {
+      grade: "No grades yet",
+      subjects: [{ name: "No subjects yet", lessons: ["No topics yet"] }],
+    };
 
   const availableSubjects =
     selectedGradeOption.subjects.map(
@@ -522,23 +407,32 @@ export function ContentPage() {
 
   /* ---------------- SAVE ---------------- */
 
-  function saveFormula(nextFormula: Formula) {
+  async function saveFormula(nextFormula: Formula) {
+    const payload = buildContentPayload("Formula", nextFormula);
+    if (!payload) return;
+    const savedContent =
+      drawerState?.mode === "edit"
+        ? await updateAdminCurriculumContent(drawerState.formula.id, payload)
+        : await createAdminCurriculumContent(payload);
+    const savedFormula = contentToFormula(savedContent);
+
     setFormulas((currentFormulas) => {
       if (drawerState?.mode === "edit") {
         return currentFormulas.map((formula) =>
           formula.id === drawerState.formula.id
-            ? nextFormula
+            ? savedFormula
             : formula,
         );
       }
 
-      return [nextFormula, ...currentFormulas];
+      return [savedFormula, ...currentFormulas];
     });
 
     setDrawerState(null);
   }
 
-  function deleteFormula(id: string) {
+  async function deleteFormula(id: string) {
+    await deleteAdminCurriculumContent(id);
     setFormulas((currentFormulas) =>
       currentFormulas.filter(
         (formula) => formula.id !== id,
@@ -546,22 +440,31 @@ export function ContentPage() {
     );
   }
 
-  function saveLessonContent(
+  async function saveLessonContent(
     kind: ContentDrawerKind,
     nextItem: LessonContent,
   ) {
+    const contentKind = singularContentLabel(kind) as "Concept" | "Example" | "Exercise";
+    const payload = buildContentPayload(contentKind, nextItem);
+    if (!payload) return;
+    const savedContent =
+      contentDrawerState?.mode === "edit"
+        ? await updateAdminCurriculumContent(contentDrawerState.item.id, payload)
+        : await createAdminCurriculumContent(payload);
+    const savedItem = contentToLessonContent(savedContent);
+
     const updateItems = (
       currentItems: LessonContent[],
     ) => {
       if (contentDrawerState?.mode === "edit") {
         return currentItems.map((item) =>
           item.id === contentDrawerState.item.id
-            ? nextItem
+            ? savedItem
             : item,
         );
       }
 
-      return [nextItem, ...currentItems];
+      return [savedItem, ...currentItems];
     };
 
     if (kind === "Concepts") {
@@ -579,10 +482,11 @@ export function ContentPage() {
     setContentDrawerState(null);
   }
 
-  function deleteLessonContent(
+  async function deleteLessonContent(
     kind: ContentDrawerKind,
     id: string,
   ) {
+    await deleteAdminCurriculumContent(id);
     const removeItem = (
       currentItems: LessonContent[],
     ) =>
@@ -605,6 +509,51 @@ export function ContentPage() {
 
   function clearContextSearch() {
     setSearchQuery("");
+  }
+
+  function buildContentPayload(
+    kind: "Formula" | "Concept" | "Example" | "Exercise",
+    item: Formula | LessonContent,
+  ): AdminCurriculumContentInput | null {
+    const selectedGradeData = grades.find((grade) => grade.name === selectedGrade);
+    const selectedSubjectData = subjects.find(
+      (subject) =>
+        subject.grade_level_id === selectedGradeData?.grade_level_id &&
+        subject.name === selectedSubject,
+    );
+    const selectedTopicData = topics.find(
+      (topic) =>
+        topic.subject_id === selectedSubjectData?.subject_id &&
+        topic.name === selectedLesson,
+    );
+
+    if (!selectedGradeData || !selectedSubjectData || !selectedTopicData) {
+      return null;
+    }
+
+    const formulaItem = kind === "Formula" ? (item as Formula) : null;
+    const lessonItem = kind === "Formula" ? null : (item as LessonContent);
+
+    return {
+      kind,
+      grade_level_id: selectedGradeData.grade_level_id,
+      subject_id: selectedSubjectData.subject_id,
+      topic_id: selectedTopicData.topic_id,
+      grade: selectedGrade,
+      subject: selectedSubject,
+      lesson: selectedLesson,
+      title: lessonItem?.title ?? "",
+      summary: lessonItem?.summary ?? "",
+      body: lessonItem?.body ?? "",
+      expression: formulaItem?.expression ?? "",
+      description: formulaItem?.description ?? "",
+      variables: formulaItem?.variables ?? [],
+      steps: formulaItem?.steps ?? [],
+      khmerTerms: formulaItem?.khmerTerms ?? [],
+      prerequisites: formulaItem?.prerequisites ?? [],
+      tags: item.tags,
+      status: item.status,
+    };
   }
 
   const actionLabel =
@@ -1128,7 +1077,7 @@ function LessonContentDrawer({
   onSave: (
     kind: ContentDrawerKind,
     item: LessonContent,
-  ) => void;
+  ) => void | Promise<void>;
   context: {
     grade: string;
     subject: string;
@@ -1304,7 +1253,7 @@ function FormulaDrawer({
 }: {
   state: FormulaDrawerState;
   onClose: () => void;
-  onSave: (formula: Formula) => void;
+  onSave: (formula: Formula) => void | Promise<void>;
   context: {
     grade: string;
     subject: string;
@@ -2246,6 +2195,37 @@ function splitCommaValues(
       item.trim(),
     )
     .filter(Boolean);
+}
+
+function contentToFormula(content: AdminCurriculumContent): Formula {
+  return {
+    id: content.content_id,
+    grade: content.grade,
+    subject: content.subject,
+    lesson: content.lesson,
+    expression: content.expression,
+    description: content.description,
+    status: content.status,
+    variables: content.variables as FormulaVariable[],
+    steps: content.steps as FormulaStep[],
+    khmerTerms: content.khmerTerms as KhmerTerm[],
+    prerequisites: content.prerequisites,
+    tags: content.tags,
+  };
+}
+
+function contentToLessonContent(content: AdminCurriculumContent): LessonContent {
+  return {
+    id: content.content_id,
+    grade: content.grade,
+    subject: content.subject,
+    lesson: content.lesson,
+    title: content.title,
+    summary: content.summary,
+    body: content.body,
+    status: content.status,
+    tags: content.tags,
+  };
 }
 
 function filterLessonContent(

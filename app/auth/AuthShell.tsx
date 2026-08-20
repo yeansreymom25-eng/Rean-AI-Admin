@@ -1,6 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
-import type { ReactNode } from "react";
+import type { ChangeEventHandler, ReactNode } from "react";
 
 type AuthShellProps = {
   title: string;
@@ -45,12 +45,22 @@ export function AuthShell({ title, subtitle, children, footer }: AuthShellProps)
 
 export function Field({
   label,
+  name,
   type = "text",
   placeholder,
+  value,
+  onChange,
+  required,
+  autoComplete,
 }: {
   label: string;
+  name?: string;
   type?: string;
   placeholder: string;
+  value?: string;
+  onChange?: ChangeEventHandler<HTMLInputElement>;
+  required?: boolean;
+  autoComplete?: string;
 }) {
   return (
     <label className="block">
@@ -58,7 +68,12 @@ export function Field({
         {label}
       </span>
       <input
+        name={name}
         type={type}
+        value={value}
+        onChange={onChange}
+        required={required}
+        autoComplete={autoComplete}
         className="h-12 w-full rounded-lg border border-[#7da6e6] bg-[#e8f1ff] px-4 text-sm font-semibold text-[#071226] outline-none transition placeholder:text-[#3e5f91] focus:border-[#5368ff] focus:ring-2 focus:ring-[#5368ff]/20"
         placeholder={placeholder}
       />
@@ -70,10 +85,12 @@ export function PrimaryButton({
   children,
   href,
   type = "button",
+  disabled = false,
 }: {
   children: ReactNode;
   href?: string;
   type?: "button" | "submit" | "reset";
+  disabled?: boolean;
 }) {
   const classes =
     "flex h-12 w-full items-center justify-center rounded-lg bg-gradient-to-r from-[#4367ff] to-[#7a4dff] text-sm font-bold text-white shadow-lg shadow-blue-950/30 transition hover:brightness-110";
@@ -87,7 +104,7 @@ export function PrimaryButton({
   }
 
   return (
-    <button type={type} className={classes}>
+    <button type={type} disabled={disabled} className={classes}>
       {children}
     </button>
   );
@@ -96,9 +113,13 @@ export function PrimaryButton({
 export function GoogleButton({
   children,
   href,
+  onClick,
+  disabled = false,
 }: {
   children: ReactNode;
   href?: string;
+  onClick?: () => void;
+  disabled?: boolean;
 }) {
   const classes =
     "flex h-12 w-full items-center justify-center gap-3 rounded-lg border border-[#35507a] bg-black text-sm font-bold text-slate-200 transition hover:border-[#5368ff] hover:text-white";
@@ -119,7 +140,7 @@ export function GoogleButton({
   }
 
   return (
-    <button className={classes}>
+    <button type="button" onClick={onClick} disabled={disabled} className={classes}>
       <Image
         src="/Ai tutor_google.png"
         alt=""
