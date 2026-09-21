@@ -1,55 +1,39 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
-  adminLogout,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react";
+import { AdminShell } from "../_features/admin/AdminShell";
+import { Icon, type IconName } from "../_features/admin/Icon";
+import {
   clearAdminSession,
-  type AdminDashboardData,
-  type DashboardNotification,
-  type CurriculumStatusItem,
-  type FlaggedAiSession,
   getAccessToken,
   loadAdminDashboard,
+  type AdminDashboardData,
+  type CurriculumStatusItem,
+  type DashboardMetric,
+  type FlaggedAiSession,
   type StudentActivityPoint,
 } from "../_features/auth/adminAuth";
-import { curriculumLinks } from "../_features/curriculum/data";
+import { usePreferences, useStoredString } from "../_features/preferences/Preferences";
+import type { MessageKey } from "../_features/preferences/messages";
 
-const loadingStats = [
-  {
-    label: "Total Students",
-    value: "...",
-    accent: "Fetching backend data",
-    icon: "students",
-    color: "text-[#5368ff]",
-  },
-  {
-    label: "Active AI Sessions",
-    value: "...",
-    accent: "Fetching backend data",
-    icon: "AI",
-    color: "text-[#1fc7e9]",
-  },
-  {
-    label: "Curriculum Progress",
-    value: "...",
-    accent: "Fetching backend data",
-    icon: "%",
-    color: "text-[#7a4dff]",
-  },
-  {
-    label: "AI Quality Score",
-    value: "...",
-    accent: "Fetching backend data",
-    icon: "quality",
-    color: "text-emerald-300",
-  },
-];
-
-type Session = FlaggedAiSession;
 const DASHBOARD_CACHE_KEY = "rean_admin_dashboard_cache_v2";
+const CACHE_TTL_MS = 5 * 60_000;
+const AUTO_REFRESH_MS = 60_000;
+const PAGE_SIZE = 5;
+
+type Range = "7" | "30";
+type Priority = "All" | "Red" | "Amber";
 
 function isAuthExpiredError(error: unknown) {
   if (!(error instanceof Error)) return false;
@@ -60,1027 +44,839 @@ function isAuthExpiredError(error: unknown) {
   );
 }
 
+function readCachedDashboard(): { data: AdminDashboardData; savedAt: number } | null {
+  try {
+    const raw = window.sessionStorage.getItem(DASHBOARD_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { savedAt?: number; data: AdminDashboardData };
+    if (!parsed.savedAt || Date.now() - parsed.savedAt > CACHE_TTL_MS) return null;
+    return { data: parsed.data, savedAt: parsed.savedAt };
+  } catch {
+    return null;
+  }
+}
+
+function storeCachedDashboard(data: AdminDashboardData) {
+  try {
+    window.sessionStorage.setItem(DASHBOARD_CACHE_KEY, JSON.stringify({ savedAt: Date.now(), data }));
+  } catch {
+    // Storage full or blocked; the live data is still on screen.
+  }
+}
+
+// A coarse clock (15 s ticks) for "updated 2 minutes ago" and the greeting.
+// The server snapshot is 0 so the first client render matches the HTML.
+function subscribeClock(onTick: () => void) {
+  const id = window.setInterval(onTick, 15_000);
+  return () => window.clearInterval(id);
+}
+const readClock = () => Math.floor(Date.now() / 15_000) * 15_000;
+
 export default function Dashboard() {
   const router = useRouter();
-  const [range, setRange] = useState<"7" | "30">("7");
-  const [isCurriculumOpen, setIsCurriculumOpen] = useState(false);
-  const [statusFilter, setStatusFilter] = useState<"All" | "Amber" | "Red">("All");
-  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
-  const [selectedSession, setSelectedSession] = useState<Session | null>(null);
-  const [page, setPage] = useState(1);
-  const [dashboardData, setDashboardData] = useState<AdminDashboardData | null>(null);
-  const [dashboardError, setDashboardError] = useState("");
+  const { t, formatRelative } = usePreferences();
+  const now = useSyncExternalStore(subscribeClock, readClock, () => 0);
+  const [rangeValue, setRangeValue] = useStoredString("rean_admin_dashboard_range", "7");
+  const range: Range = rangeValue === "30" ? "30" : "7";
 
+  const [data, setData] = useState<AdminDashboardData | null>(null);
+  const [updatedAt, setUpdatedAt] = useState<number | null>(null);
+  const [error, setError] = useState("");
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [selected, setSelected] = useState<FlaggedAiSession | null>(null);
+  const inFlight = useRef(false);
+  const lastLoad = useRef(0);
+
+  const refresh = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setIsRefreshing(true);
+    try {
+      const next = await loadAdminDashboard();
+      setData(next);
+      setUpdatedAt(Date.now());
+      setError("");
+      storeCachedDashboard(next);
+    } catch (loadError) {
+      if (isAuthExpiredError(loadError)) {
+        clearAdminSession();
+        router.replace("/auth/Login");
+        return;
+      }
+      setError(loadError instanceof Error && loadError.message ? loadError.message : "Request failed");
+    } finally {
+      lastLoad.current = Date.now();
+      inFlight.current = false;
+      setIsRefreshing(false);
+    }
+  }, [router]);
+
+  // First paint from the session cache, then fetch live data.
   useEffect(() => {
     if (!getAccessToken()) {
       router.replace("/auth/Login");
       return;
     }
+    queueMicrotask(() => {
+      const cached = readCachedDashboard();
+      if (cached) {
+        setData((current) => current ?? cached.data);
+        setUpdatedAt((current) => current ?? cached.savedAt);
+      }
+      void refresh();
+    });
+  }, [refresh, router]);
 
-    const cachedDashboard = readCachedDashboard();
-    if (cachedDashboard) {
-      setDashboardData(cachedDashboard);
-    }
+  // Keep the numbers live: poll while the tab is visible, and catch up as soon
+  // as the admin comes back to a tab that has been in the background.
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") void refresh();
+    }, AUTO_REFRESH_MS);
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && Date.now() - lastLoad.current > 20_000) void refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, [refresh]);
 
-    loadAdminDashboard()
-      .then((data) => {
-        setDashboardData(data);
-        storeCachedDashboard(data);
-        setDashboardError("");
-      })
-      .catch((error) => {
-        if (isAuthExpiredError(error)) {
-          clearAdminSession();
-          router.replace("/auth/Login");
-          return;
-        }
-        setDashboardError(error instanceof Error ? error.message : "Unable to load dashboard");
-      });
-  }, [router]);
-
-  const admin = dashboardData?.admin;
-  const adminName = admin?.full_name || "Admin";
-  const adminRole = admin?.role === "administrator" ? "Administrator" : "Admin";
-  const adminPhoto = admin?.profile_image_url || null;
-  const adminInitials = adminName
-    .split(" ")
-    .map((part) => part[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
-  const stats = buildStats(dashboardData);
-  const sessions = dashboardData?.insights.flagged_ai_sessions ?? [];
-  const notifications = dashboardData?.insights.notifications ?? [];
-
-  const filteredSessions = useMemo(
-    () =>
-      sessions.filter(
-        (session) => statusFilter === "All" || session.status === statusFilter,
-      ),
-    [statusFilter],
-  );
-  const pageSize = 3;
-  const totalPages = Math.max(1, Math.ceil(filteredSessions.length / pageSize));
-  const safePage = Math.min(page, totalPages);
-  const visibleSessions = filteredSessions.slice(
-    (safePage - 1) * pageSize,
-    safePage * pageSize,
-  );
-
-  function changeStatusFilter(nextStatus: "All" | "Amber" | "Red") {
-    setStatusFilter(nextStatus);
-    setPage(1);
-  }
-
-  async function handleSignOut() {
-    await adminLogout();
-    router.replace("/auth/Login");
-  }
+  const adminName = data?.admin.full_name?.split(" ")[0];
+  const hour = now ? new Date(now).getHours() : null;
+  const greeting =
+    hour === null ? null : hour < 12 ? t("dash.goodMorning") : hour < 18 ? t("dash.goodAfternoon") : t("dash.goodEvening");
+  const flagged = data?.insights.flagged_ai_sessions ?? [];
 
   return (
-    <main className="min-h-screen bg-[#070b19] text-slate-100">
-      <div className="flex min-h-screen">
-        <aside className="hidden w-[280px] shrink-0 border-r border-[#243856] bg-[#070b19] px-6 py-7 lg:flex lg:flex-col">
-          <Brand />
+    <AdminShell title={t("nav.dashboard")} dashboard={data} hideHeading>
+      <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-bold tracking-tight text-fg sm:text-[28px]">
+            {greeting ? `${greeting}${adminName ? `, ${adminName}` : ""}` : t("nav.dashboard")}
+          </h1>
+          <p className="mt-1.5 text-sm text-slate-500">{t("dash.subtitle")}</p>
+        </div>
 
-          <nav className="mt-10 space-y-2">
-            <Link
-              href="/admin_dashboard"
-              className="flex h-11 w-full items-center gap-4 rounded-xl bg-gradient-to-r from-[#4367ff] to-[#7a4dff] px-4 text-left text-sm font-semibold text-white shadow-lg shadow-blue-950/30 transition"
-            >
-              <SidebarIcon name="dashboard" />
-              Dashboard
-            </Link>
-
-            <div>
-              <button
-                type="button"
-                onClick={() => setIsCurriculumOpen((isOpen) => !isOpen)}
-                className="flex h-11 w-full items-center gap-4 rounded-xl px-4 text-left text-sm font-semibold text-slate-500 transition hover:bg-[#101a2b] hover:text-slate-200"
-                aria-expanded={isCurriculumOpen}
-              >
-                <SidebarIcon name="curriculum" />
-                Curriculum
-                <span className={`ml-auto flex h-5 w-5 items-center justify-center text-[#7da6e6] transition-transform ${isCurriculumOpen ? "rotate-180" : "rotate-0"}`}>
-                  <ChevronDownIcon />
-                </span>
-              </button>
-              {isCurriculumOpen && (
-                <div className="space-y-2 px-4 pb-4 pl-[60px]">
-                  {curriculumLinks.map((item) => (
-                    <Link
-                      key={item.label}
-                      href={item.href}
-                      className="flex h-11 w-full items-center rounded-lg px-4 text-sm font-bold text-[#6f89b4] transition hover:bg-[#101a2b] hover:text-slate-200"
-                    >
-                      {item.label}
-                    </Link>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <Link
-              href="/students"
-              className="flex h-11 w-full items-center gap-4 rounded-xl px-4 text-left text-sm font-semibold text-slate-500 transition hover:bg-[#101a2b] hover:text-slate-200"
-            >
-              <SidebarIcon name="students" />
-              Students
-            </Link>
-            <Link
-              href="/settings"
-              className="flex h-11 w-full items-center gap-4 rounded-xl px-4 text-left text-sm font-semibold text-slate-500 transition hover:bg-[#101a2b] hover:text-slate-200"
-            >
-              <SidebarIcon name="settings" />
-              Settings
-            </Link>
-          </nav>
-
-          <div className="mt-auto">
-            <div className="flex items-center gap-3 px-4 py-3">
-              <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-gradient-to-r from-[#4367ff] to-[#7a4dff] text-sm font-bold">
-                {adminPhoto ? (
-                  <img
-                    src={adminPhoto}
-                    alt={`${adminName} admin profile`}
-                    className="h-full w-full object-cover"
-                  />
-                ) : (
-                  adminInitials || "A"
-                )}
-              </div>
-              <div>
-                <p className="text-sm font-bold text-white">{adminName}</p>
-                <button
-                  type="button"
-                  onClick={handleSignOut}
-                  className="text-xs font-semibold text-rose-400 transition hover:text-rose-300"
-                >
-                  Sign out
-                </button>
-              </div>
-            </div>
-          </div>
-        </aside>
-
-        <section className="flex min-w-0 flex-1 flex-col">
-          <header className="flex h-20 items-center justify-between border-b border-[#243856] bg-[#0b1324] px-5 md:px-10">
-            <div className="flex min-w-0 items-center gap-3 text-sm font-semibold">
-              <Image
-                src="/AI Tutor_Logo.png"
-                alt="Rean AI logo"
-                width={42}
-                height={42}
-                className="h-10 w-10 object-contain lg:hidden"
-                priority
-              />
-              <span className="hidden text-slate-500 sm:inline">Admin</span>
-              <span className="hidden text-slate-600 sm:inline">/</span>
-              <span className="text-slate-200">Dashboard</span>
-            </div>
-
-            <div className="relative flex items-center gap-4">
-              <button
-                type="button"
-                onClick={() => setIsNotificationsOpen((isOpen) => !isOpen)}
-                className="relative hidden h-11 w-11 items-center justify-center rounded-full border border-[#243856] bg-[#101a2b] text-[#7da6e6] shadow-[0_12px_30px_rgba(0,0,0,0.18)] transition hover:border-[#5368ff] hover:text-white sm:flex"
-                aria-label="Notifications"
-                aria-expanded={isNotificationsOpen}
-              >
-                <NotificationIcon />
-                {notifications.length > 0 && (
-                  <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-[#5368ff]" />
-                )}
-              </button>
-              {isNotificationsOpen && (
-                <NotificationsPanel
-                  notifications={notifications}
-                  onClose={() => setIsNotificationsOpen(false)}
-                />
-              )}
-              <div className="hidden text-right sm:block">
-                <p className="text-sm font-bold text-white">{adminName}</p>
-                <p className="text-xs text-slate-500">{adminRole}</p>
-              </div>
-              <div
-                aria-label={`${adminName} admin profile`}
-                className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-full border-2 border-[#5368ff] bg-gradient-to-br from-[#4367ff] to-[#7a4dff] text-sm font-extrabold text-white"
-              >
-                {adminPhoto ? (
-                  <img
-                    src={adminPhoto}
-                    alt={`${adminName} admin profile`}
-                    className="h-full w-full object-cover"
-                  />
-                ) : (
-                  adminInitials || "A"
-                )}
-              </div>
-            </div>
-          </header>
-
-          <div className="mx-auto w-full max-w-[1120px] flex-1 px-5 py-8 md:px-8 lg:py-12">
-            <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-              <div>
-                <h1 className="text-3xl font-extrabold tracking-tight text-white">
-                  Dashboard Overview
-                </h1>
-                <p className="mt-2 text-sm leading-6 text-slate-500">
-                  Monitor students, curriculum coverage, and AI review queues.
-                </p>
-              </div>
-
-              <div className="flex w-fit rounded-xl border border-[#243856] bg-[#0b1324] p-1">
-                <RangeButton active={range === "7"} onClick={() => setRange("7")}>
-                  Last 7 Days
-                </RangeButton>
-                <RangeButton active={range === "30"} onClick={() => setRange("30")}>
-                  Last 30 Days
-                </RangeButton>
-              </div>
-            </div>
-
-            <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
-              {stats.map((stat) => (
-                <StatCard key={stat.label} stat={stat} range={range} />
-              ))}
-            </div>
-            {dashboardError && (
-              <p className="mt-4 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm font-semibold text-rose-200">
-                {dashboardError}
-              </p>
-            )}
-
-            <div className="mt-6 grid gap-6 lg:grid-cols-[2fr_1fr]">
-              <StudentActivityCard
-                range={range}
-                points={
-                  range === "7"
-                    ? dashboardData?.insights.student_activity.last_7_days
-                    : dashboardData?.insights.student_activity.last_30_days
-                }
-              />
-              <CurriculumStatusCard
-                overallProgress={
-                  dashboardData?.insights.curriculum_status.overall_progress
-                }
-                subjects={dashboardData?.insights.curriculum_status.subjects}
-              />
-            </div>
-
-            <SessionTable
-              sessions={visibleSessions}
-              count={filteredSessions.length}
-              page={safePage}
-              totalPages={totalPages}
-              statusFilter={statusFilter}
-              onStatusFilterChange={changeStatusFilter}
-              onPageChange={setPage}
-              onOpen={setSelectedSession}
-            />
-          </div>
-        </section>
+        <div className="flex flex-wrap items-center gap-2">
+          <LiveStatus
+            isRefreshing={isRefreshing}
+            hasError={Boolean(error)}
+            label={
+              isRefreshing
+                ? t("dash.updating")
+                : updatedAt && now
+                  ? t("dash.updated", { time: formatRelative(new Date(updatedAt), Math.max(now, updatedAt)) })
+                  : t("dash.updating")
+            }
+          />
+          <Segmented
+            label="Range"
+            value={range}
+            options={[
+              { value: "7", label: t("dash.last7") },
+              { value: "30", label: t("dash.last30") },
+            ]}
+            onChange={(value) => setRangeValue(value)}
+          />
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            disabled={isRefreshing}
+            className="grid h-9 w-9 place-items-center rounded-lg border border-line bg-surface text-slate-400 transition hover:border-line-strong hover:text-fg disabled:opacity-60"
+            aria-label={t("dash.refresh")}
+            title={t("dash.refresh")}
+          >
+            <Icon name="refresh" className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
+          </button>
+        </div>
       </div>
 
-      {selectedSession && (
-        <SessionDrawer
-          session={selectedSession}
-          onClose={() => setSelectedSession(null)}
-        />
+      {error && (
+        <div role="alert" className="mb-5 flex flex-col gap-3 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 sm:flex-row sm:items-center">
+          <Icon name="alert" className="h-5 w-5 shrink-0 text-rose-300" />
+          <div className="min-w-0 flex-1 text-sm">
+            <p className="font-medium text-rose-200">{t("dash.loadError")}</p>
+            <p className="truncate text-rose-300/80">{data ? `${t("dash.offline")} · ${error}` : error}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            className="h-9 rounded-lg border border-rose-400/40 px-3 text-sm font-medium text-rose-200 hover:bg-rose-500/10"
+          >
+            {t("dash.retry")}
+          </button>
+        </div>
       )}
-    </main>
+
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+        <KpiCard href="/students" icon="students" tone="brand" label={t("dash.totalStudents")} metric={data?.metrics.total_students} />
+        <KpiCard href="/ai_reviews" icon="sparkles" tone="info" label={t("dash.activeSessions")} metric={data?.metrics.active_ai_sessions} />
+        <KpiCard href="/curriculum_versions" icon="grades" tone="violet" label={t("dash.curriculumProgress")} metric={data?.metrics.curriculum_progress} />
+        <KpiCard href="/ai_reviews" icon="review" tone="emerald" label={t("dash.aiQuality")} metric={data?.metrics.ai_quality_score} />
+      </div>
+
+      <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+        <ActivityCard
+          range={range}
+          points={data ? (range === "7" ? data.insights.student_activity.last_7_days : data.insights.student_activity.last_30_days) : undefined}
+        />
+        <CoverageCard
+          overall={data?.insights.curriculum_status.overall_progress}
+          subjects={data?.insights.curriculum_status.subjects}
+        />
+      </div>
+
+      <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+        <FlaggedSessions sessions={data ? flagged : undefined} onOpen={setSelected} />
+        <div className="flex flex-col gap-4">
+          <AttentionCard sessions={data ? flagged : undefined} />
+          <QuickActions />
+        </div>
+      </div>
+
+      {selected && <SessionDialog session={selected} onClose={() => setSelected(null)} />}
+    </AdminShell>
   );
 }
 
-function Brand() {
+/* ------------------------------------------------------------------------ */
+
+function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return <section className={`rounded-xl border border-line bg-surface shadow-card ${className}`}>{children}</section>;
+}
+
+function CardHeader({ title, subtitle, right }: { title: string; subtitle?: string; right?: ReactNode }) {
   return (
-    <div className="flex items-center gap-3">
-      <Image
-        src="/AI Tutor_Logo.png"
-        alt="Rean AI logo"
-        width={50}
-        height={50}
-        className="h-12 w-12 object-contain"
-        priority
-      />
-      <span className="text-xl font-bold tracking-tight text-white">Rean AI</span>
+    <div className="flex items-start justify-between gap-3 px-5 pt-5">
+      <div className="min-w-0">
+        <h2 className="text-[15px] font-semibold text-fg">{title}</h2>
+        {subtitle && <p className="mt-0.5 text-xs text-slate-500">{subtitle}</p>}
+      </div>
+      {right}
     </div>
   );
 }
 
-function readCachedDashboard(): AdminDashboardData | null {
-  if (typeof window === "undefined") return null;
-  const raw = window.sessionStorage.getItem(DASHBOARD_CACHE_KEY);
-  if (!raw) return null;
-
-  try {
-    const parsed = JSON.parse(raw) as { expiresAt: number; data: AdminDashboardData };
-    if (parsed.expiresAt < Date.now()) {
-      window.sessionStorage.removeItem(DASHBOARD_CACHE_KEY);
-      return null;
-    }
-    return parsed.data;
-  } catch {
-    window.sessionStorage.removeItem(DASHBOARD_CACHE_KEY);
-    return null;
-  }
-}
-
-function storeCachedDashboard(data: AdminDashboardData): void {
-  if (typeof window === "undefined") return;
-  window.sessionStorage.setItem(
-    DASHBOARD_CACHE_KEY,
-    JSON.stringify({
-      expiresAt: Date.now() + 20_000,
-      data,
-    }),
-  );
-}
-
-function ChevronDownIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      className="h-4 w-4"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.4"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="m6 9 6 6 6-6" />
-    </svg>
-  );
-}
-
-function buildStats(data: AdminDashboardData | null) {
-  if (!data) return loadingStats;
-
-  return [
-    {
-      ...loadingStats[0],
-      value: data.metrics.total_students.display,
-      accent: data.metrics.total_students.accent,
-    },
-    {
-      ...loadingStats[1],
-      value: data.metrics.active_ai_sessions.display,
-      accent: data.metrics.active_ai_sessions.accent,
-    },
-    {
-      ...loadingStats[2],
-      value: data.metrics.curriculum_progress.display,
-      accent: data.metrics.curriculum_progress.accent,
-    },
-    {
-      ...loadingStats[3],
-      value: data.metrics.ai_quality_score.display,
-      accent: data.metrics.ai_quality_score.accent,
-    },
-  ];
-}
-
-function RangeButton({
-  active,
-  onClick,
-  children,
+function Segmented<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
 }: {
-  active: boolean;
-  onClick: () => void;
-  children: ReactNode;
+  label: string;
+  value: T;
+  options: { value: T; label: string; count?: number }[];
+  onChange: (value: T) => void;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded-lg px-5 py-3 text-sm font-bold transition ${
-        active
-          ? "bg-gradient-to-r from-[#4367ff] to-[#7a4dff] text-white shadow-lg shadow-blue-950/30"
-          : "text-slate-500 hover:bg-[#101a2b] hover:text-slate-200"
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
-
-function StatCard({
-  stat,
-  range,
-}: {
-  stat: (typeof loadingStats)[number];
-  range: "7" | "30";
-}) {
-  return (
-    <article className="min-h-[142px] rounded-xl border border-[#243856] bg-[#0b1324] p-6 shadow-[0_18px_45px_rgba(0,0,0,0.18)] transition hover:border-[#35507a]">
-      <div className="mb-5 flex items-center justify-between">
-        <span
-          className={`flex h-10 w-10 items-center justify-center rounded-lg border border-[#243856] bg-[#101a2b] text-sm font-extrabold ${stat.color}`}
-        >
-          <StatIcon name={stat.icon} />
-        </span>
-        <span
-          className={`rounded-full px-2.5 py-1 text-xs font-bold ${
-            stat.accent.includes("+") ||
-            stat.accent.includes("Live") ||
-            stat.accent.includes("Excellent")
-              ? "bg-emerald-500/15 text-emerald-300"
-              : "bg-[#101a2b] text-slate-500"
+    <div role="radiogroup" aria-label={label} className="flex h-9 items-center gap-0.5 rounded-lg border border-line bg-surface p-0.5">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          role="radio"
+          aria-checked={value === option.value}
+          onClick={() => onChange(option.value)}
+          className={`flex h-full items-center gap-1.5 rounded-md px-3 text-sm font-medium transition ${
+            value === option.value ? "bg-surface-3 text-fg" : "text-slate-500 hover:text-fg"
           }`}
         >
-          {range === "7" ? stat.accent : stat.accent.replace("month", "30 days")}
-        </span>
-      </div>
-      <p className="text-sm font-semibold text-slate-500">{stat.label}</p>
-      <p className="mt-2 text-3xl font-extrabold text-white">{stat.value}</p>
-    </article>
-  );
-}
-
-function StatIcon({ name }: { name: string }) {
-  if (name === "students") {
-    return (
-      <svg
-        aria-hidden="true"
-        className="h-5 w-5"
-        viewBox="0 0 24 24"
-        fill="none"
-      >
-        <path
-          d="M12 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"
-          stroke="currentColor"
-          strokeWidth="1.8"
-        />
-        <path
-          d="M5.5 19.5a6.5 6.5 0 0 1 13 0"
-          stroke="currentColor"
-          strokeLinecap="round"
-          strokeWidth="1.8"
-        />
-      </svg>
-    );
-  }
-
-  if (name === "quality") {
-    return (
-      <svg
-        aria-hidden="true"
-        className="h-5 w-5"
-        viewBox="0 0 24 24"
-        fill="none"
-      >
-        <path
-          d="M12 3.75 18.25 6v5.25c0 4.05-2.52 7.68-6.25 9-3.73-1.32-6.25-4.95-6.25-9V6L12 3.75Z"
-          stroke="currentColor"
-          strokeLinejoin="round"
-          strokeWidth="1.8"
-        />
-        <path
-          d="m9.25 12.1 1.85 1.85 3.9-4.2"
-          stroke="currentColor"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth="1.8"
-        />
-      </svg>
-    );
-  }
-
-  return <span>{name}</span>;
-}
-
-function StudentActivityCard({
-  range,
-  points,
-}: {
-  range: "7" | "30";
-  points?: StudentActivityPoint[];
-}) {
-  const fallback =
-    range === "7"
-      ? ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((label) => ({
-          label,
-          value: 0,
-        }))
-      : ["W1", "W2", "W3", "W4", "Now"].map((label) => ({ label, value: 0 }));
-  const chartPoints = points?.length ? points : fallback;
-  const maxValue = Math.max(1, ...chartPoints.map((point) => point.value));
-  const coordinates = chartPoints.map((point, index) => {
-    const x =
-      chartPoints.length === 1 ? 320 : (index / (chartPoints.length - 1)) * 640;
-    const y = 205 - (point.value / maxValue) * 165;
-    return { x, y };
-  });
-  const linePath = coordinates
-    .map((point, index) =>
-      `${index === 0 ? "M" : "L"}${point.x.toFixed(1)} ${point.y.toFixed(1)}`,
-    )
-    .join(" ");
-  const areaPath = `${linePath} L640 245 L0 245 Z`;
-  const yAxis = [maxValue, Math.round(maxValue * 0.75), Math.round(maxValue * 0.5), Math.round(maxValue * 0.25)];
-
-  return (
-    <section className="rounded-xl border border-[#243856] bg-[#0b1324] p-6 shadow-[0_18px_45px_rgba(0,0,0,0.16)]">
-      <div className="mb-7 flex items-center justify-between">
-        <h2 className="text-lg font-extrabold text-white">Student Activity</h2>
-        <span className="rounded-full bg-[#101a2b] px-3 py-1 text-xs font-bold text-slate-500">
-          {range === "7" ? "Weekly Engagement" : "Monthly Engagement"}
-        </span>
-      </div>
-
-      <div className="relative h-[255px] overflow-hidden rounded-lg border border-[#243856] bg-[#070b19]">
-        <div className="absolute inset-0 bg-[linear-gradient(to_right,rgba(83,104,255,.08)_1px,transparent_1px),linear-gradient(to_bottom,rgba(83,104,255,.08)_1px,transparent_1px)] bg-[size:25%_100%,100%_25%]" />
-        <div className="absolute left-4 top-5 flex h-[190px] flex-col justify-between text-xs font-bold text-slate-600">
-          {yAxis.map((value, index) => (
-            <span key={`${value}-${index}`}>{value}</span>
-          ))}
-        </div>
-        <svg
-          viewBox="0 0 640 245"
-          className="absolute inset-x-10 bottom-8 h-[205px] w-[calc(100%-5rem)] overflow-visible"
-          role="img"
-          aria-label="Student activity line chart"
-        >
-          <defs>
-            <linearGradient id="lineFill" x1="0" x2="0" y1="0" y2="1">
-              <stop offset="0%" stopColor="#5368ff" stopOpacity="0.38" />
-              <stop offset="100%" stopColor="#7a4dff" stopOpacity="0.05" />
-            </linearGradient>
-          </defs>
-          <path d={areaPath} fill="url(#lineFill)" />
-          <path
-            d={linePath}
-            fill="none"
-            stroke="#5368ff"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth="4"
-          />
-          {coordinates.map((point, index) => (
-            <circle
-              key={`${chartPoints[index].label}-${index}`}
-              cx={point.x}
-              cy={point.y}
-              r="5"
-              fill="#5368ff"
-              stroke="#243856"
-              strokeWidth="2"
-            />
-          ))}
-        </svg>
-        <div className="absolute inset-x-10 bottom-3 grid text-xs font-bold text-slate-600" style={{ gridTemplateColumns: `repeat(${chartPoints.length}, minmax(0, 1fr))` }}>
-          {chartPoints.map((point, index) => (
-            <span key={`${point.label}-${index}`}>{point.label}</span>
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function CurriculumStatusCard({
-  overallProgress,
-  subjects,
-}: {
-  overallProgress?: number;
-  subjects?: CurriculumStatusItem[];
-}) {
-  const visibleSubjects = subjects ?? [];
-  const progress = Math.max(0, Math.min(100, overallProgress ?? 0));
-  const conicStops = buildConicGradient(visibleSubjects);
-
-  return (
-    <section className="rounded-xl border border-[#243856] bg-[#0b1324] p-6 shadow-[0_18px_45px_rgba(0,0,0,0.16)]">
-      <div className="mb-5 flex items-center justify-between">
-        <h2 className="text-lg font-extrabold text-white">Curriculum Status</h2>
-        <span className="rounded-full bg-[#101a2b] px-3 py-1 text-xs font-bold text-slate-500">
-          By Subject
-        </span>
-      </div>
-
-      <div className="flex flex-col items-center">
-        <div
-          className="grid h-48 w-48 place-items-center rounded-full"
-          style={{
-            background: conicStops,
-          }}
-        >
-          <div className="grid h-28 w-28 place-items-center rounded-full border border-[#243856] bg-[#0b1324] text-center">
-            <span className="text-2xl font-extrabold text-white">{progress}%</span>
-          </div>
-        </div>
-        <div className="mt-6 w-full space-y-3">
-          {visibleSubjects.length ? (
-            visibleSubjects.map((item) => (
-              <div key={item.subject_id} className="flex items-center justify-between text-sm">
-                <span className="flex items-center gap-2 font-bold text-slate-400">
-                  <i className="h-3 w-3 rounded-sm" style={{ backgroundColor: item.color }} />
-                  {item.label}
-                </span>
-                <span className="font-extrabold text-white">{item.value}%</span>
-              </div>
-            ))
-          ) : (
-            <p className="rounded-lg border border-[#243856] bg-[#101a2b] px-4 py-3 text-center text-sm font-semibold text-slate-500">
-              No curriculum data yet
-            </p>
+          {option.label}
+          {option.count !== undefined && (
+            <span className="rounded-full bg-surface-2 px-1.5 text-[11px] tabular-nums text-slate-400">{option.count}</span>
           )}
-        </div>
-      </div>
-    </section>
+        </button>
+      ))}
+    </div>
   );
 }
 
-function buildConicGradient(subjects: CurriculumStatusItem[]) {
-  const total = subjects.reduce((sum, item) => sum + Math.max(0, item.value), 0);
-  if (total === 0) {
-    return "conic-gradient(#243856 0 100%)";
+function LiveStatus({ label, isRefreshing, hasError }: { label: string; isRefreshing: boolean; hasError: boolean }) {
+  const { t } = usePreferences();
+  return (
+    <span className="flex h-9 items-center gap-2 rounded-lg border border-line bg-surface px-3 text-xs text-slate-500" aria-live="polite">
+      <span className="relative flex h-2 w-2">
+        {!hasError && !isRefreshing && <span className="absolute inset-0 animate-ping rounded-full bg-emerald-500/60" />}
+        <span className={`relative h-2 w-2 rounded-full ${hasError ? "bg-rose-500" : isRefreshing ? "bg-amber-500" : "bg-emerald-500"}`} />
+      </span>
+      <span className="font-medium text-slate-300">{hasError ? t("dash.offline") : t("dash.live")}</span>
+      <span className="hidden sm:inline">· {label}</span>
+    </span>
+  );
+}
+
+const toneStyles = {
+  brand: "bg-brand/12 text-brand",
+  info: "bg-info/12 text-info",
+  violet: "bg-violet-500/12 text-violet-300",
+  emerald: "bg-emerald-500/12 text-emerald-300",
+} as const;
+
+function accentTone(accent: string) {
+  const text = accent.trim().toLowerCase();
+  if (text.startsWith("-") || text.startsWith("−") || text.includes("down") || text.includes("needs")) return "text-rose-300 bg-rose-500/10";
+  if (text.startsWith("+") || text.includes("live") || text.includes("excellent") || text.includes("good")) return "text-emerald-300 bg-emerald-500/10";
+  return "text-slate-400 bg-surface-2";
+}
+
+function KpiCard({
+  href,
+  icon,
+  tone,
+  label,
+  metric,
+}: {
+  href: string;
+  icon: IconName;
+  tone: keyof typeof toneStyles;
+  label: string;
+  metric?: DashboardMetric;
+}) {
+  return (
+    <Link
+      href={href}
+      className="group rounded-xl border border-line bg-surface p-4 shadow-card transition hover:-translate-y-0.5 hover:border-line-strong sm:p-5"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className={`grid h-9 w-9 place-items-center rounded-lg ${toneStyles[tone]}`}>
+          <Icon name={icon} className="h-[18px] w-[18px]" />
+        </span>
+        <Icon name="arrowRight" className="h-4 w-4 text-slate-600 opacity-0 transition group-hover:translate-x-0.5 group-hover:opacity-100" />
+      </div>
+      <p className="mt-4 truncate text-xs font-medium text-slate-500 sm:text-sm">{label}</p>
+      {metric ? (
+        <p className="mt-1 text-2xl font-bold tabular-nums tracking-tight text-fg sm:text-[28px]">{metric.display}</p>
+      ) : (
+        <span className="skeleton mt-2 block h-7 w-20 rounded-md" />
+      )}
+      {metric ? (
+        metric.accent && (
+          <span className={`mt-2 inline-block max-w-full truncate rounded-full px-2 py-0.5 text-[11px] font-medium ${accentTone(metric.accent)}`}>
+            {metric.accent}
+          </span>
+        )
+      ) : (
+        <span className="skeleton mt-2 block h-4 w-24 rounded-full" />
+      )}
+    </Link>
+  );
+}
+
+/* ------------------------------------------------------------------------ */
+
+function useElementWidth<T extends HTMLElement>() {
+  const ref = useRef<T>(null);
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    const observer = new ResizeObserver(([entry]) => setWidth(Math.round(entry.contentRect.width)));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  return [ref, width] as const;
+}
+
+function niceCeiling(value: number) {
+  if (value <= 4) return 4;
+  const magnitude = 10 ** Math.floor(Math.log10(value));
+  const step = [1, 2, 2.5, 5, 10].find((candidate) => candidate * magnitude >= value / 4) ?? 10;
+  return Math.ceil(value / (step * magnitude)) * step * magnitude;
+}
+
+function ActivityCard({ range, points }: { range: Range; points?: StudentActivityPoint[] }) {
+  const { t, formatNumber } = usePreferences();
+  const [ref, width] = useElementWidth<HTMLDivElement>();
+  const [hover, setHover] = useState<number | null>(null);
+  const height = 220;
+  const pad = { top: 12, right: 12, bottom: 26, left: 36 };
+
+  const series = points ?? [];
+  const total = series.reduce((sum, point) => sum + point.value, 0);
+  const peak = series.reduce((max, point) => Math.max(max, point.value), 0);
+  const average = series.length ? total / series.length : 0;
+  const yMax = niceCeiling(peak);
+  const innerWidth = Math.max(0, width - pad.left - pad.right);
+  const innerHeight = height - pad.top - pad.bottom;
+  const x = (index: number) => pad.left + (series.length <= 1 ? innerWidth / 2 : (index / (series.length - 1)) * innerWidth);
+  const y = (value: number) => pad.top + innerHeight - (value / yMax) * innerHeight;
+  const line = series.map((point, index) => `${index ? "L" : "M"}${x(index).toFixed(1)} ${y(point.value).toFixed(1)}`).join(" ");
+  const area = series.length ? `${line} L${x(series.length - 1).toFixed(1)} ${pad.top + innerHeight} L${x(0).toFixed(1)} ${pad.top + innerHeight} Z` : "";
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map((fraction) => Math.round(yMax * fraction));
+  const labelEvery = Math.max(1, Math.ceil(series.length / Math.max(1, Math.floor(innerWidth / 56))));
+  const hovered = hover !== null ? series[hover] : undefined;
+
+  function onPointerMove(event: ReactPointerEvent<SVGSVGElement>) {
+    if (!series.length) return;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const relative = event.clientX - bounds.left - pad.left;
+    const index = series.length <= 1 ? 0 : Math.round((relative / innerWidth) * (series.length - 1));
+    setHover(Math.max(0, Math.min(series.length - 1, index)));
   }
 
-  let cursor = 0;
-  const stops = subjects.map((item) => {
-    const start = cursor;
-    const width = (Math.max(0, item.value) / total) * 100;
-    cursor += width;
-    return `${item.color} ${start.toFixed(1)}% ${cursor.toFixed(1)}%`;
-  });
-
-  return `conic-gradient(${stops.join(", ")})`;
-}
-
-function SessionTable({
-  sessions,
-  count,
-  page,
-  totalPages,
-  statusFilter,
-  onStatusFilterChange,
-  onPageChange,
-  onOpen,
-}: {
-  sessions: Session[];
-  count: number;
-  page: number;
-  totalPages: number;
-  statusFilter: "All" | "Amber" | "Red";
-  onStatusFilterChange: (status: "All" | "Amber" | "Red") => void;
-  onPageChange: (page: number) => void;
-  onOpen: (session: Session) => void;
-}) {
   return (
-    <section className="mt-6 overflow-hidden rounded-xl border border-[#243856] bg-[#0b1324] shadow-[0_18px_45px_rgba(0,0,0,0.2)]">
-      <div className="flex flex-col gap-4 border-b border-[#243856] px-6 py-5 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h2 className="text-lg font-extrabold text-white">Flagged AI Sessions</h2>
-          <p className="mt-1 text-sm font-semibold text-slate-500">
-            Review sessions that need admin or teacher attention.
-          </p>
-        </div>
-        <div className="flex rounded-xl border border-[#243856] bg-[#101a2b] p-1">
-          {(["All", "Amber", "Red"] as const).map((status) => (
-            <button
-              key={status}
-              type="button"
-              onClick={() => onStatusFilterChange(status)}
-              className={`rounded-lg px-4 py-2 text-sm font-bold transition ${
-                statusFilter === status
-                  ? "bg-gradient-to-r from-[#4367ff] to-[#7a4dff] text-white"
-                  : "text-slate-500 hover:text-slate-200"
-              }`}
+    <Card>
+      <CardHeader
+        title={t("dash.activity")}
+        subtitle={range === "7" ? t("dash.activitySub7") : t("dash.activitySub30")}
+      />
+      <dl className="grid grid-cols-3 gap-3 px-5 pt-4">
+        {([
+          ["dash.total", total],
+          ["dash.peak", peak],
+          ["dash.average", Math.round(average * 10) / 10],
+        ] as [MessageKey, number][]).map(([key, value]) => (
+          <div key={key}>
+            <dt className="text-xs text-slate-500">{t(key)}</dt>
+            <dd className="mt-0.5 text-lg font-semibold tabular-nums text-fg">{points ? formatNumber(value) : <span className="skeleton block h-6 w-12 rounded" />}</dd>
+          </div>
+        ))}
+      </dl>
+      <div ref={ref} className="relative px-2 pb-3 pt-2">
+        {!points ? (
+          <div className="skeleton mx-3 h-[208px] rounded-lg" />
+        ) : total === 0 ? (
+          <div className="grid h-[220px] place-items-center text-sm text-slate-500">{t("dash.noActivity")}</div>
+        ) : width > 0 ? (
+          <>
+            <svg
+              width={width}
+              height={height}
+              className="block touch-none"
+              role="img"
+              aria-label={`${t("dash.activity")}: ${series.map((point) => `${point.label} ${point.value}`).join(", ")}`}
+              onPointerMove={onPointerMove}
+              onPointerLeave={() => setHover(null)}
             >
-              {status}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[860px] text-left">
-          <thead className="bg-[#101a2b] text-xs uppercase text-slate-500">
-            <tr>
-              <th className="px-6 py-4 font-extrabold">Session ID</th>
-              <th className="px-6 py-4 font-extrabold">Student</th>
-              <th className="px-6 py-4 font-extrabold">Subject</th>
-              <th className="px-6 py-4 font-extrabold">Grade</th>
-              <th className="px-6 py-4 font-extrabold">Reason</th>
-              <th className="px-6 py-4 font-extrabold">Status</th>
-              <th className="px-6 py-4 text-right font-extrabold">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-[#243856]">
-            {sessions.length ? (
-              sessions.map((session) => (
-                <tr
-                  key={session.id}
-                  className="text-sm transition hover:bg-[#101a2b]/55"
-                >
-                  <td className="px-6 py-5 font-bold text-[#1fc7e9]">{session.id}</td>
-                  <td className="px-6 py-5">
-                    <p className="font-bold text-white">{session.name}</p>
-                    <p className="mt-1 text-xs text-slate-500">{session.time}</p>
-                  </td>
-                  <td className="px-6 py-5 font-semibold text-slate-300">
-                    {session.subject}
-                  </td>
-                  <td className="px-6 py-5 font-semibold text-slate-300">
-                    {session.grade}
-                  </td>
-                  <td className="max-w-xs px-6 py-5 leading-6 text-slate-500">
-                    {session.reason}
-                  </td>
-                  <td className="px-6 py-5">
-                    <SessionStatusPill status={session.status} />
-                  </td>
-                  <td className="px-6 py-5 text-right">
-                    <button
-                      type="button"
-                      onClick={() => onOpen(session)}
-                      className="inline-flex h-9 items-center rounded-lg border border-[#243856] bg-[#101a2b] px-4 text-sm font-bold text-slate-300 transition hover:border-[#5368ff] hover:text-white"
-                    >
-                      Open
-                    </button>
-                  </td>
-                </tr>
-              ))
-            ) : (
-              <tr>
-                <td
-                  colSpan={7}
-                  className="px-6 py-10 text-center text-sm font-semibold text-slate-500"
-                >
-                  No flagged AI sessions yet
-                </td>
-              </tr>
+              <defs>
+                <linearGradient id="activityFill" x1="0" x2="0" y1="0" y2="1">
+                  <stop offset="0%" stopColor="var(--c-brand)" stopOpacity="0.28" />
+                  <stop offset="100%" stopColor="var(--c-brand)" stopOpacity="0" />
+                </linearGradient>
+              </defs>
+              {ticks.map((tick) => (
+                <g key={tick}>
+                  <line x1={pad.left} x2={width - pad.right} y1={y(tick)} y2={y(tick)} stroke="var(--c-line)" strokeDasharray={tick ? "3 4" : undefined} />
+                  <text x={pad.left - 8} y={y(tick)} dy="0.32em" textAnchor="end" className="fill-slate-500 text-[11px] tabular-nums">
+                    {formatNumber(tick)}
+                  </text>
+                </g>
+              ))}
+              <path d={area} fill="url(#activityFill)" />
+              <path d={line} fill="none" stroke="var(--c-brand)" strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
+              {series.map((point, index) =>
+                index % labelEvery === 0 || index === series.length - 1 ? (
+                  <text key={`${point.label}-${index}`} x={x(index)} y={height - 6} textAnchor="middle" className="fill-slate-500 text-[11px]">
+                    {point.label}
+                  </text>
+                ) : null,
+              )}
+              {hover !== null && hovered && (
+                <g>
+                  <line x1={x(hover)} x2={x(hover)} y1={pad.top} y2={pad.top + innerHeight} stroke="var(--c-line-strong)" />
+                  <circle cx={x(hover)} cy={y(hovered.value)} r={5} fill="var(--c-surface)" stroke="var(--c-brand)" strokeWidth={2.5} />
+                </g>
+              )}
+            </svg>
+            {hover !== null && hovered && (
+              <div
+                className="pointer-events-none absolute top-2 rounded-lg border border-line bg-surface px-3 py-2 text-xs shadow-card"
+                style={{
+                  left: Math.min(Math.max(x(hover) + 8 - 60, 8), width - 128),
+                }}
+              >
+                <p className="text-slate-500">{hovered.label}</p>
+                <p className="mt-0.5 text-sm font-semibold tabular-nums text-fg">{formatNumber(hovered.value)}</p>
+              </div>
             )}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="flex flex-col gap-4 border-t border-[#243856] px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
-        <p className="text-xs font-semibold text-slate-600">
-          Showing {count ? (page - 1) * 3 + 1 : 0}-{Math.min(page * 3, count)} of{" "}
-          {count} flagged sessions
-        </p>
-        <div className="flex gap-2">
-          <PageButton disabled={page === 1} onClick={() => onPageChange(page - 1)}>
-            Previous
-          </PageButton>
-          {Array.from({ length: totalPages }, (_, index) => index + 1).map((item) => (
-            <PageButton
-              key={item}
-              active={item === page}
-              onClick={() => onPageChange(item)}
-            >
-              {item}
-            </PageButton>
-          ))}
-          <PageButton
-            disabled={page === totalPages}
-            onClick={() => onPageChange(page + 1)}
-          >
-            Next
-          </PageButton>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function NotificationsPanel({
-  notifications,
-  onClose,
-}: {
-  notifications: DashboardNotification[];
-  onClose: () => void;
-}) {
-  return (
-    <div className="absolute right-20 top-14 z-30 w-[344px] overflow-hidden rounded-xl border border-[#243856] bg-[#0b1324] text-left shadow-[0_18px_45px_rgba(0,0,0,0.32)]">
-      <div className="flex items-center justify-between border-b border-[#243856] px-5 py-4">
-        <div>
-          <p className="text-sm font-extrabold text-white">Notifications</p>
-          <p className="mt-1 text-xs font-semibold text-slate-500">
-            Platform activity and review alerts
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="flex h-8 w-8 items-center justify-center rounded-full border border-[#243856] text-sm font-bold text-slate-500 transition hover:border-[#5368ff] hover:text-white"
-          aria-label="Close notifications"
-        >
-          x
-        </button>
-      </div>
-      <div className="divide-y divide-[#243856]">
-        {notifications.length ? (
-          notifications.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className="flex w-full gap-3 px-5 py-4 text-left transition hover:bg-[#101a2b]"
-            >
-              <span
-                className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${
-                  item.tone === "amber"
-                    ? "bg-amber-300"
-                    : item.tone === "rose"
-                      ? "bg-rose-300"
-                      : "bg-[#5368ff]"
-                }`}
-              />
-              <span className="min-w-0">
-                <span className="block text-sm font-bold text-slate-100">
-                  {item.title}
-                </span>
-                <span className="mt-1 block text-xs font-semibold leading-5 text-slate-500">
-                  {item.body}
-                </span>
-                <span className="mt-1 block text-[11px] font-bold text-[#7da6e6]">
-                  {item.time}
-                </span>
-              </span>
-            </button>
-          ))
+          </>
         ) : (
-          <p className="px-5 py-6 text-center text-sm font-semibold text-slate-500">
-            No notifications yet
-          </p>
+          <div className="h-[220px]" />
         )}
       </div>
-    </div>
+    </Card>
   );
 }
 
-function SessionDrawer({
-  session,
-  onClose,
-}: {
-  session: Session;
-  onClose: () => void;
-}) {
+function CoverageCard({ overall, subjects }: { overall?: number; subjects?: CurriculumStatusItem[] }) {
+  const { t, formatNumber } = usePreferences();
+  const items = subjects ?? [];
+  const total = items.reduce((sum, item) => sum + Math.max(0, item.value), 0);
+  const radius = 52;
+  const circumference = 2 * Math.PI * radius;
+  let offset = 0;
+  const progress = Math.max(0, Math.min(100, overall ?? 0));
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-6 backdrop-blur-sm">
-      <button
-        className="absolute inset-0 cursor-default"
-        aria-label="Close session details"
-        onClick={onClose}
-      />
-      <aside className="relative flex max-h-[92vh] w-full max-w-xl flex-col overflow-hidden rounded-xl border border-[#35507a] bg-[#0b1324] shadow-[0_30px_90px_rgba(0,0,0,0.48)]">
-        <div className="flex h-20 items-center justify-between border-b border-[#243856] bg-[#101a2b] px-7">
-          <div>
-            <h2 className="text-xl font-extrabold tracking-tight text-white">
-              {session.id}
-            </h2>
-            <p className="mt-1 text-xs font-semibold text-slate-500">
-              AI session review
-            </p>
+    <Card className="flex flex-col">
+      <CardHeader title={t("dash.curriculumStatus")} subtitle={t("dash.curriculumSub")} />
+      {!subjects ? (
+        <div className="flex flex-1 flex-col items-center gap-4 p-5">
+          <span className="skeleton h-36 w-36 rounded-full" />
+          <span className="skeleton h-4 w-full rounded" />
+          <span className="skeleton h-4 w-full rounded" />
+        </div>
+      ) : (
+        <div className="flex flex-1 flex-col gap-5 p-5 sm:flex-row sm:items-center lg:flex-col lg:items-stretch">
+          <div className="relative mx-auto h-36 w-36 shrink-0">
+            <svg viewBox="0 0 128 128" className="h-full w-full -rotate-90" aria-hidden="true">
+              <circle cx="64" cy="64" r={radius} fill="none" stroke="var(--c-surface-3)" strokeWidth="14" />
+              {total > 0 &&
+                items.map((item) => {
+                  const length = (Math.max(0, item.value) / total) * circumference;
+                  const gap = items.length > 1 ? 2 : 0;
+                  const segment = (
+                    <circle
+                      key={item.subject_id}
+                      cx="64"
+                      cy="64"
+                      r={radius}
+                      fill="none"
+                      stroke={item.color}
+                      strokeWidth="14"
+                      strokeDasharray={`${Math.max(0, length - gap)} ${circumference}`}
+                      strokeDashoffset={-offset}
+                    />
+                  );
+                  offset += length;
+                  return segment;
+                })}
+            </svg>
+            <div className="absolute inset-0 grid place-items-center text-center">
+              <div>
+                <p className="text-2xl font-bold tabular-nums text-fg">{progress}%</p>
+                <p className="text-[11px] text-slate-500">{t("dash.overall")}</p>
+              </div>
+            </div>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex h-10 w-10 items-center justify-center rounded-full border border-[#243856] text-2xl leading-none text-slate-500 transition hover:border-[#5368ff] hover:bg-[#0b1324] hover:text-white"
-            aria-label="Close"
-          >
-            x
-          </button>
+
+          {items.length ? (
+            <ul className="w-full space-y-3">
+              {items.map((item) => (
+                <li key={item.subject_id}>
+                  <div className="flex items-center justify-between gap-3 text-sm">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ backgroundColor: item.color }} />
+                      <span className="truncate font-medium text-slate-300">{item.label}</span>
+                    </span>
+                    <span className="font-semibold tabular-nums text-fg">{item.value}%</span>
+                  </div>
+                  <div className="mt-1.5 flex items-center gap-2">
+                    <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-3">
+                      <span className="block h-full rounded-full" style={{ width: `${Math.min(100, item.average_progress)}%`, backgroundColor: item.color }} />
+                    </span>
+                    <span className="text-[11px] tabular-nums text-slate-500">{t("dash.learners", { n: formatNumber(item.selected_students) })}</span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="rounded-lg border border-dashed border-line px-4 py-6 text-center text-sm text-slate-500">{t("dash.noCurriculum")}</p>
+          )}
         </div>
-        <div className="space-y-5 p-6">
-          <DetailRow label="Student" value={session.name} />
-          <DetailRow label="Subject" value={`${session.subject} / ${session.grade}`} />
-          <DetailRow label="Reason" value={session.reason} />
-          <DetailRow label="Status" value={session.status} />
-          <div className="rounded-lg border border-[#35507a] bg-[#101a2b] p-4">
-            <p className="text-xs font-bold uppercase text-slate-500">Next Step</p>
-            <p className="mt-2 text-sm leading-6 text-slate-300">
-              Assign this session to a curriculum reviewer or mark it as resolved
-              after confirming the AI response.
-            </p>
-          </div>
-        </div>
-        <div className="mt-auto grid grid-cols-2 gap-3 border-t border-[#243856] p-6">
-          <button
-            type="button"
-            onClick={onClose}
-            className="h-12 rounded-lg border border-[#35507a] bg-[#101a2b] text-sm font-bold text-white transition hover:border-[#5368ff] hover:bg-[#0b1324]"
-          >
-            Close
-          </button>
-          <button
-            type="button"
-            onClick={onClose}
-            className="h-12 rounded-lg bg-gradient-to-r from-[#4367ff] to-[#7a4dff] text-sm font-bold text-white shadow-lg shadow-blue-950/30 transition hover:brightness-110"
-          >
-            Mark Reviewed
-          </button>
-        </div>
-      </aside>
-    </div>
+      )}
+    </Card>
   );
 }
 
-function DetailRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <p className="text-xs font-bold uppercase text-slate-500">{label}</p>
-      <p className="mt-2 text-sm font-semibold text-slate-200">{value}</p>
-    </div>
-  );
-}
+/* ------------------------------------------------------------------------ */
 
-function SessionStatusPill({ status }: { status: string }) {
+function PriorityPill({ status }: { status: FlaggedAiSession["status"] }) {
+  const { t } = usePreferences();
+  const high = status === "Red";
   return (
     <span
-      className={`rounded-full px-3 py-1 text-xs font-bold ${
-        status === "Red"
-          ? "bg-red-500/15 text-red-300"
-          : "bg-amber-500/15 text-amber-300"
+      className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+        high ? "bg-rose-500/12 text-rose-300" : "bg-amber-500/12 text-amber-300"
       }`}
     >
-      {status}
+      <span className={`h-1.5 w-1.5 rounded-full ${high ? "bg-rose-500" : "bg-amber-500"}`} />
+      {high ? t("dash.high") : t("dash.medium")}
     </span>
   );
 }
 
-function PageButton({
-  active,
-  disabled,
-  onClick,
-  children,
-}: {
-  active?: boolean;
-  disabled?: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
+function FlaggedSessions({ sessions, onOpen }: { sessions?: FlaggedAiSession[]; onOpen: (session: FlaggedAiSession) => void }) {
+  const { t } = usePreferences();
+  const [priority, setPriority] = useState<Priority>("All");
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+
+  const all = useMemo(() => sessions ?? [], [sessions]);
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return all.filter(
+      (session) =>
+        (priority === "All" || session.status === priority) &&
+        (!needle || [session.id, session.name, session.subject, session.grade, session.reason].join(" ").toLowerCase().includes(needle)),
+    );
+  }, [all, priority, query]);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const visible = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const count = (status: FlaggedAiSession["status"]) => all.filter((session) => session.status === status).length;
+
   return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      className={`flex h-8 min-w-8 items-center justify-center rounded-lg border px-3 text-sm font-bold transition ${
-        active
-          ? "border-transparent bg-gradient-to-r from-[#4367ff] to-[#7a4dff] text-white"
-          : "border-[#243856] bg-[#0b1324] text-slate-500 hover:border-[#5368ff] hover:text-white disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:border-[#243856] disabled:hover:text-slate-500"
+    <Card className="flex flex-col">
+      <CardHeader title={t("dash.flagged")} subtitle={t("dash.flaggedSub")} />
+      <div className="flex flex-col gap-2 px-5 pt-4 sm:flex-row sm:items-center">
+        <Segmented<Priority>
+          label={t("dash.priority")}
+          value={priority}
+          options={[
+            { value: "All", label: t("dash.all"), count: all.length },
+            { value: "Red", label: t("dash.high"), count: count("Red") },
+            { value: "Amber", label: t("dash.medium"), count: count("Amber") },
+          ]}
+          onChange={(value) => {
+            setPriority(value);
+            setPage(1);
+          }}
+        />
+        <label className="relative flex-1">
+          <span className="sr-only">{t("dash.search")}</span>
+          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500">
+            <Icon name="search" className="h-4 w-4" />
+          </span>
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setPage(1);
+            }}
+            placeholder={t("dash.search")}
+            className="h-9 w-full rounded-lg border border-line bg-surface-2 pl-9 pr-3 text-sm text-fg outline-none placeholder:text-slate-500 focus:border-brand focus:ring-2 focus:ring-brand/20"
+          />
+        </label>
+      </div>
+
+      <ul className="mt-3 flex-1 divide-y divide-line border-t border-line">
+        {!sessions ? (
+          Array.from({ length: 3 }, (_, index) => (
+            <li key={index} className="flex items-center gap-3 px-5 py-4">
+              <span className="skeleton h-9 w-9 rounded-full" />
+              <span className="flex-1 space-y-2">
+                <span className="skeleton block h-4 w-40 rounded" />
+                <span className="skeleton block h-3 w-64 max-w-full rounded" />
+              </span>
+            </li>
+          ))
+        ) : visible.length === 0 ? (
+          <li className="flex flex-col items-center gap-2 px-5 py-12 text-center text-sm text-slate-500">
+            <span className="grid h-10 w-10 place-items-center rounded-full bg-emerald-500/12 text-emerald-300">
+              <Icon name="check" className="h-5 w-5" />
+            </span>
+            {all.length === 0 ? t("dash.allClear") : t("dash.noFlagged")}
+          </li>
+        ) : (
+          visible.map((session) => (
+            <li key={session.id}>
+              <button
+                type="button"
+                onClick={() => onOpen(session)}
+                className="flex w-full items-start gap-3 px-5 py-3.5 text-left transition hover:bg-surface-2"
+              >
+                <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-full bg-surface-3 text-xs font-semibold text-slate-300">
+                  {session.name
+                    .split(/\s+/)
+                    .map((part) => part[0])
+                    .join("")
+                    .slice(0, 2)
+                    .toUpperCase()}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="font-medium text-fg">{session.name}</span>
+                    <PriorityPill status={session.status} />
+                  </span>
+                  <span className="mt-0.5 block text-xs text-slate-500">
+                    {session.subject} · {session.grade} · <span className="font-mono">{session.id}</span>
+                  </span>
+                  <span className="mt-1 line-clamp-2 block text-sm text-slate-400">{session.reason}</span>
+                </span>
+                <span className="hidden shrink-0 text-xs text-slate-500 sm:block">{session.time}</span>
+              </button>
+            </li>
+          ))
+        )}
+      </ul>
+
+      {filtered.length > PAGE_SIZE && (
+        <div className="flex items-center justify-between gap-3 border-t border-line px-5 py-3 text-xs text-slate-500">
+          <span className="tabular-nums">
+            {t("dash.showing", {
+              from: (safePage - 1) * PAGE_SIZE + 1,
+              to: Math.min(safePage * PAGE_SIZE, filtered.length),
+              total: filtered.length,
+            })}
+          </span>
+          <div className="flex gap-1">
+            <button
+              type="button"
+              disabled={safePage === 1}
+              onClick={() => setPage(safePage - 1)}
+              className="grid h-8 w-8 place-items-center rounded-lg border border-line text-slate-400 hover:text-fg disabled:opacity-40"
+              aria-label={t("dash.previous")}
+            >
+              <Icon name="chevronLeft" className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              disabled={safePage === totalPages}
+              onClick={() => setPage(safePage + 1)}
+              className="grid h-8 w-8 place-items-center rounded-lg border border-line text-slate-400 hover:text-fg disabled:opacity-40"
+              aria-label={t("dash.next")}
+            >
+              <Icon name="chevronRight" className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function AttentionCard({ sessions }: { sessions?: FlaggedAiSession[] }) {
+  const { t, formatNumber } = usePreferences();
+  if (!sessions) return <Card className="skeleton h-[132px]"><span className="sr-only">{t("dash.updating")}</span></Card>;
+
+  const high = sessions.filter((session) => session.status === "Red").length;
+  const medium = sessions.length - high;
+  const clear = sessions.length === 0;
+
+  return (
+    <Card
+      className={`overflow-hidden p-5 ${
+        clear ? "" : high ? "border-rose-500/30 bg-gradient-to-br from-rose-500/10 to-transparent" : "border-amber-500/30 bg-gradient-to-br from-amber-500/10 to-transparent"
       }`}
     >
-      {children}
-    </button>
+      <div className="flex items-center gap-3">
+        <span
+          className={`grid h-9 w-9 place-items-center rounded-lg ${
+            clear ? "bg-emerald-500/12 text-emerald-300" : high ? "bg-rose-500/15 text-rose-300" : "bg-amber-500/15 text-amber-300"
+          }`}
+        >
+          <Icon name={clear ? "check" : "alert"} className="h-[18px] w-[18px]" />
+        </span>
+        <h2 className="text-[15px] font-semibold text-fg">{t("dash.attention")}</h2>
+      </div>
+      {clear ? (
+        <p className="mt-3 text-sm text-slate-400">{t("dash.allClear")}</p>
+      ) : (
+        <>
+          <div className="mt-4 flex gap-6">
+            <div>
+              <p className="text-2xl font-bold tabular-nums text-rose-300">{formatNumber(high)}</p>
+              <p className="text-xs text-slate-500">{t("dash.attentionHigh")}</p>
+            </div>
+            <div>
+              <p className="text-2xl font-bold tabular-nums text-amber-300">{formatNumber(medium)}</p>
+              <p className="text-xs text-slate-500">{t("dash.attentionMedium")}</p>
+            </div>
+          </div>
+          <Link
+            href="/ai_reviews"
+            className="mt-4 flex h-9 items-center justify-center gap-2 rounded-lg brand-gradient text-sm font-semibold text-white transition hover:brightness-110"
+          >
+            {t("dash.openQueue")}
+            <Icon name="arrowRight" className="h-4 w-4" />
+          </Link>
+        </>
+      )}
+    </Card>
   );
 }
 
-function NotificationIcon() {
+function QuickActions() {
+  const { t } = usePreferences();
+  const actions: { href: string; icon: IconName; title: MessageKey; sub: MessageKey }[] = [
+    { href: "/content", icon: "content", title: "dash.qaContent", sub: "dash.qaContentSub" },
+    { href: "/curriculum_versions", icon: "versions", title: "dash.qaPublish", sub: "dash.qaPublishSub" },
+    { href: "/ai_reviews", icon: "review", title: "dash.qaReviews", sub: "dash.qaReviewsSub" },
+    { href: "/students", icon: "students", title: "dash.qaStudents", sub: "dash.qaStudentsSub" },
+  ];
   return (
-    <svg
-      aria-hidden="true"
-      className="h-5 w-5"
-      viewBox="0 0 24 24"
-      fill="none"
-    >
-      <path
-        d="M15.5 17.5h-7a2 2 0 0 1-1.7-3.05l.5-.8A4.6 4.6 0 0 0 8 11.2V9.5a4 4 0 0 1 8 0v1.7c0 .87.24 1.72.7 2.45l.5.8a2 2 0 0 1-1.7 3.05Z"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.8"
-      />
-      <path
-        d="M10 19a2.2 2.2 0 0 0 4 0"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeWidth="1.8"
-      />
-    </svg>
+    <Card className="flex-1">
+      <CardHeader title={t("dash.quickActions")} />
+      <ul className="p-2 pt-3">
+        {actions.map((action) => (
+          <li key={action.href + action.title}>
+            <Link href={action.href} className="group flex items-center gap-3 rounded-lg px-3 py-2.5 transition hover:bg-surface-2">
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-line bg-surface-2 text-slate-400 group-hover:text-brand">
+                <Icon name={action.icon} className="h-[18px] w-[18px]" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium text-fg">{t(action.title)}</span>
+                <span className="block truncate text-xs text-slate-500">{t(action.sub)}</span>
+              </span>
+              <Icon name="chevronRight" className="h-4 w-4 text-slate-600 transition group-hover:translate-x-0.5 group-hover:text-slate-400" />
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </Card>
   );
 }
 
-function SidebarIcon({ name }: { name: string }) {
-  const iconClass = "h-5 w-5";
+function SessionDialog({ session, onClose }: { session: FlaggedAiSession; onClose: () => void }) {
+  const { t } = usePreferences();
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => event.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const rows: [MessageKey, ReactNode][] = [
+    ["dash.student", session.name],
+    ["dash.subject", session.subject],
+    ["dash.grade", session.grade],
+    ["dash.priority", <PriorityPill key="p" status={session.status} />],
+    ["dash.reason", session.reason],
+  ];
 
   return (
-    <span className="flex w-7 justify-center">
-      {name === "dashboard" && (
-        <svg className={iconClass} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M4 5h6v6H4V5Zm10 0h6v6h-6V5ZM4 15h6v4H4v-4Zm10 0h6v4h-6v-4Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-        </svg>
-      )}
-      {name === "curriculum" && (
-        <svg className={iconClass} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M5 5.5h7a3 3 0 0 1 3 3v10a3 3 0 0 0-3-3H5v-10Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-          <path d="M19 5.5h-4a3 3 0 0 0-3 3v10a3 3 0 0 1 3-3h4v-10Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-        </svg>
-      )}
-      {name === "students" && (
-        <svg className={iconClass} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7.5 1a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5ZM4 19a5 5 0 0 1 10 0M14 18a4 4 0 0 1 6 0" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-        </svg>
-      )}
-      {name === "settings" && (
-        <svg className={iconClass} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" stroke="currentColor" strokeWidth="1.8" />
-          <path d="M19 12a7.4 7.4 0 0 0-.1-1.2l2-1.5-2-3.4-2.4 1a7.8 7.8 0 0 0-2-1.1L14.2 3h-4.4l-.4 2.8a7.8 7.8 0 0 0-2 1.1l-2.4-1-2 3.4 2 1.5A7.4 7.4 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.4-1a7.8 7.8 0 0 0 2 1.1l.4 2.8h4.4l.4-2.8a7.8 7.8 0 0 0 2-1.1l2.4 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
-        </svg>
-      )}
-    </span>
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-label={t("dash.sessionReview")}>
+      <button type="button" aria-label={t("shell.close")} className="absolute inset-0 bg-overlay backdrop-blur-sm" onClick={onClose} />
+      <div className="relative flex max-h-[92vh] w-full max-w-lg flex-col overflow-hidden rounded-t-2xl border border-line bg-surface shadow-card sm:rounded-2xl">
+        <div className="flex items-start justify-between gap-3 border-b border-line px-5 py-4">
+          <div className="min-w-0">
+            <p className="text-xs text-slate-500">{t("dash.sessionReview")} · {session.time}</p>
+            <h2 className="mt-0.5 truncate font-mono text-base font-semibold text-fg">{session.id}</h2>
+          </div>
+          <button type="button" onClick={onClose} className="grid h-9 w-9 place-items-center rounded-lg text-slate-400 hover:bg-surface-2 hover:text-fg" aria-label={t("shell.close")}>
+            <Icon name="close" className="h-[18px] w-[18px]" />
+          </button>
+        </div>
+        <dl className="space-y-4 overflow-y-auto px-5 py-5 text-sm">
+          {rows.map(([label, value]) => (
+            <div key={label} className="grid gap-1 sm:grid-cols-[120px_1fr] sm:gap-3">
+              <dt className="text-slate-500">{t(label)}</dt>
+              <dd className="whitespace-pre-wrap text-fg">{value}</dd>
+            </div>
+          ))}
+          <p className="flex gap-2 rounded-lg border border-line bg-surface-2 p-3 text-xs leading-5 text-slate-400">
+            <Icon name="review" className="h-4 w-4 shrink-0 text-brand" />
+            {t("dash.reviewHint")}
+          </p>
+        </dl>
+        <div className="grid gap-2 border-t border-line p-4 sm:grid-cols-2">
+          <button type="button" onClick={onClose} className="h-10 rounded-lg border border-line text-sm font-medium text-fg hover:bg-surface-2">
+            {t("shell.close")}
+          </button>
+          <Link
+            href="/ai_reviews"
+            className="flex h-10 items-center justify-center gap-2 rounded-lg brand-gradient text-sm font-semibold text-white hover:brightness-110"
+          >
+            {t("dash.openInQueue")}
+            <Icon name="arrowRight" className="h-4 w-4" />
+          </Link>
+        </div>
+      </div>
+    </div>
   );
 }

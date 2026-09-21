@@ -1,26 +1,158 @@
 @import "tailwindcss";
 
+/*
+ * Rean AI admin design tokens.
+ *
+ * Every surface, border and text colour in the admin reads from these
+ * variables, so the whole app follows the chosen theme (dark, light, or the
+ * operating-system setting). Dark is the brand default. A small inline script
+ * resolves the saved choice to <html data-theme="light|dark"> before first paint.
+ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: dark;
+  --c-canvas: #070b19;
+  --c-surface: #0c1427;
+  --c-surface-2: #111b2f;
+  --c-surface-3: #18253e;
+  --c-line: #1f2e4a;
+  --c-line-strong: #33496f;
+  --c-fg: #eef2fb;
+  --c-accent-fg: #8ea8dc;
+  --c-brand: #5368ff;
+  --c-brand-2: #7a4dff;
+  --c-info: #22c7e8;
+  --c-overlay: rgb(2 6 23 / 0.72);
+  --c-shadow: 0 1px 0 rgb(255 255 255 / 0.03) inset, 0 18px 40px -18px rgb(0 0 0 / 0.55);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --c-canvas: #f5f7fc;
+  --c-surface: #ffffff;
+  --c-surface-2: #f2f4fa;
+  --c-surface-3: #e8ecf6;
+  --c-line: #e2e7f1;
+  --c-line-strong: #c9d2e3;
+  --c-fg: #0f172a;
+  --c-accent-fg: #3f51c7;
+  --c-brand: #4f5ff5;
+  --c-brand-2: #7446f2;
+  --c-info: #0e8fb0;
+  --c-overlay: rgb(15 23 42 / 0.45);
+  --c-shadow: 0 1px 2px rgb(15 23 42 / 0.04), 0 12px 32px -16px rgb(15 23 42 / 0.18);
+
+  /* Pages written for a dark canvas use light slate and pale tints for text.
+     Flip those scales so the same classes stay readable on white. */
+  --color-slate-100: #0f172a;
+  --color-slate-200: #1e293b;
+  --color-slate-300: #334155;
+  --color-slate-400: #475569;
+  --color-slate-600: #94a3b8;
+  --color-slate-700: #cbd5e1;
+  --color-rose-100: #9f1239;
+  --color-rose-200: #be123c;
+  --color-rose-300: #be123c;
+  --color-rose-400: #e11d48;
+  --color-red-200: #b91c1c;
+  --color-red-300: #b91c1c;
+  --color-amber-100: #92400e;
+  --color-amber-200: #b45309;
+  --color-amber-300: #b45309;
+  --color-emerald-100: #065f46;
+  --color-emerald-200: #047857;
+  --color-emerald-300: #047857;
+  --color-cyan-100: #155e75;
+  --color-cyan-200: #0e7490;
+  --color-cyan-300: #0e7490;
+  --color-sky-200: #0369a1;
+  --color-sky-300: #0369a1;
+  --color-violet-200: #6d28d9;
+  --color-violet-300: #6d28d9;
+  --color-indigo-200: #4338ca;
+  --color-indigo-300: #4338ca;
+  --color-blue-950: #c7d2fe;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-canvas: var(--c-canvas);
+  --color-surface: var(--c-surface);
+  --color-surface-2: var(--c-surface-2);
+  --color-surface-3: var(--c-surface-3);
+  --color-line: var(--c-line);
+  --color-line-strong: var(--c-line-strong);
+  --color-fg: var(--c-fg);
+  --color-accent-fg: var(--c-accent-fg);
+  --color-brand: var(--c-brand);
+  --color-brand-2: var(--c-brand-2);
+  --color-info: var(--c-info);
+  --color-overlay: var(--c-overlay);
+  --shadow-card: var(--c-shadow);
+  --font-sans: var(--font-inter-src), var(--font-khmer-src), ui-sans-serif, system-ui, sans-serif;
+  --font-khmer: var(--font-khmer-src), var(--font-inter-src), sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@layer base {
+  html {
+    background: var(--c-canvas);
+  }
+
+  body {
+    background: var(--c-canvas);
+    color: var(--c-fg);
+    font-family: var(--font-sans);
+    font-feature-settings: "cv11", "ss01";
+  }
+
+  /* Khmer script needs extra line height for stacked subscript consonants. */
+  :lang(km) body {
+    line-height: 1.7;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--c-brand);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--c-brand) 35%, transparent);
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--c-line-strong) transparent;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@utility brand-gradient {
+  background-image: linear-gradient(90deg, var(--c-brand), var(--c-brand-2));
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@utility skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--c-surface-3);
+
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--c-fg) 7%, transparent), transparent);
+    animation: shimmer 1.4s infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

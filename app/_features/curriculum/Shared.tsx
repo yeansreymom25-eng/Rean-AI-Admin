@@ -4,6 +4,7 @@ const statusClasses: Record<string, string> = {
   Active: "bg-emerald-500/15 text-emerald-300",
   Draft: "bg-amber-500/15 text-amber-300",
   Inactive: "bg-rose-500/15 text-rose-300",
+  Archived: "bg-slate-500/15 text-slate-300",
 };
 
 export function DataSurface({
@@ -14,18 +15,18 @@ export function DataSurface({
   footer: string;
 }) {
   return (
-    <section className="overflow-hidden rounded-xl border border-[#243856] bg-[#0b1324] shadow-[0_18px_45px_rgba(0,0,0,0.2)]">
+    <section className="overflow-hidden rounded-xl border border-line bg-surface shadow-card">
       <div className="overflow-x-auto">{children}</div>
-      <div className="flex flex-col gap-4 border-t border-[#243856] px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-4 border-t border-line px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-xs font-semibold text-slate-600">{footer}</p>
         <div className="flex gap-2">
           {["<", "1", "2", ">"].map((item) => (
             <button
               key={item}
-              className={`flex h-8 min-w-8 items-center justify-center rounded-lg border border-[#243856] px-2 text-sm font-bold transition hover:border-[#5368ff] hover:text-white ${
+              className={`flex h-8 min-w-8 items-center justify-center rounded-lg border border-line px-2 text-sm font-bold transition hover:border-brand hover:text-fg ${
                 item === "1"
-                  ? "bg-gradient-to-r from-[#4367ff] to-[#7a4dff] text-white"
-                  : "bg-[#0b1324] text-slate-500"
+                  ? "bg-gradient-to-r from-brand to-brand-2 text-white"
+                  : "bg-surface text-slate-500"
               }`}
             >
               {item}
@@ -51,7 +52,7 @@ export function StatusPill({ status }: { status: string }) {
 
 export function EmptyCurriculumState({ label }: { label: string }) {
   return (
-    <section className="rounded-xl border border-[#243856] bg-[#0b1324] p-8 shadow-[0_18px_45px_rgba(0,0,0,0.18)]">
+    <section className="rounded-xl border border-line bg-surface p-8 shadow-card">
       <p className="text-sm font-semibold text-slate-500">
         {label} management will use the same table, search, and popup pattern.
       </p>
@@ -69,20 +70,20 @@ export function Drawer({
   children: ReactNode;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-6 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay px-4 py-6 backdrop-blur-sm">
       <button
         className="absolute inset-0 cursor-default"
         aria-label={`Close ${title} panel`}
         onClick={onClose}
       />
-      <aside className="relative flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-[#35507a] bg-[#0b1324] shadow-[0_30px_90px_rgba(0,0,0,0.48)]">
-        <div className="flex h-20 items-center justify-between border-b border-[#243856] bg-[#101a2b] px-7">
+      <aside className="relative flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-line-strong bg-surface shadow-card">
+        <div className="flex h-20 items-center justify-between border-b border-line bg-surface-2 px-7">
           <h2 className="text-xl font-bold tracking-tight text-slate-50">
             {title}
           </h2>
           <button
             onClick={onClose}
-            className="flex h-10 w-10 items-center justify-center rounded-full border border-[#243856] text-2xl leading-none text-slate-500 transition hover:border-[#5368ff] hover:bg-[#0b1324] hover:text-white"
+            className="flex h-10 w-10 items-center justify-center rounded-full border border-line text-2xl leading-none text-slate-500 transition hover:border-brand hover:bg-surface hover:text-fg"
             aria-label="Close"
           >
             x
@@ -108,11 +109,11 @@ export function Field({
 }) {
   return (
     <label className="block">
-      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-[#8da7d8]">
+      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-accent-fg">
         {label}
       </span>
       <input
-        className="h-12 w-full rounded-lg border border-[#3b5d8f] bg-[#101a2b] px-4 text-sm font-medium text-slate-100 outline-none transition placeholder:text-slate-400/70 focus:border-[#6f7cff] focus:ring-2 focus:ring-[#5368ff]/20"
+        className="h-12 w-full rounded-lg border border-line-strong bg-surface-2 px-4 text-sm font-medium text-slate-100 outline-none transition placeholder:text-slate-400/70 focus:border-brand focus:ring-2 focus:ring-brand/20"
         placeholder={placeholder}
         defaultValue={defaultValue}
       />
@@ -131,11 +132,11 @@ export function TextArea({
 }) {
   return (
     <label className="block">
-      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-[#8da7d8]">
+      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-accent-fg">
         {label}
       </span>
       <textarea
-        className="min-h-28 w-full resize-none rounded-lg border border-[#3b5d8f] bg-[#101a2b] px-4 py-3 text-sm font-medium leading-6 text-slate-100 outline-none transition placeholder:text-slate-400/70 focus:border-[#6f7cff] focus:ring-2 focus:ring-[#5368ff]/20"
+        className="min-h-28 w-full resize-none rounded-lg border border-line-strong bg-surface-2 px-4 py-3 text-sm font-medium leading-6 text-slate-100 outline-none transition placeholder:text-slate-400/70 focus:border-brand focus:ring-2 focus:ring-brand/20"
         placeholder={placeholder}
         defaultValue={defaultValue}
       />
@@ -145,7 +146,7 @@ export function TextArea({
 
 export function StatusToggle() {
   return (
-    <label className="flex items-center justify-between rounded-lg border border-[#3b5d8f] bg-[#101a2b] p-4">
+    <label className="flex items-center justify-between rounded-lg border border-line-strong bg-surface-2 p-4">
       <span>
         <span className="block text-sm font-semibold text-slate-50">Status</span>
         <span className="text-xs font-medium text-slate-400">
@@ -165,18 +166,18 @@ export function DrawerActions({
   onClose: () => void;
 }) {
   return (
-    <div className="mt-auto grid grid-cols-2 gap-3 border-t border-[#243856] p-6">
+    <div className="mt-auto grid grid-cols-2 gap-3 border-t border-line p-6">
       <button
         type="button"
         onClick={onClose}
-        className="h-12 rounded-lg border border-[#3b5d8f] bg-[#101a2b] text-sm font-bold text-slate-100 transition hover:border-[#6f7cff] hover:bg-[#0b1324]"
+        className="h-12 rounded-lg border border-line-strong bg-surface-2 text-sm font-bold text-slate-100 transition hover:border-brand hover:bg-surface"
       >
         Cancel
       </button>
       <button
         type="button"
         onClick={onClose}
-        className="h-12 rounded-lg bg-gradient-to-r from-[#4367ff] to-[#7a4dff] text-sm font-bold text-white shadow-lg shadow-blue-950/30 transition hover:brightness-110"
+        className="h-12 rounded-lg bg-gradient-to-r from-brand to-brand-2 text-sm font-bold text-white shadow-lg shadow-blue-950/30 transition hover:brightness-110"
       >
         {primaryLabel}
       </button>

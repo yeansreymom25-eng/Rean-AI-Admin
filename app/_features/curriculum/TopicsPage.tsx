@@ -10,57 +10,20 @@ import {
 import { useRouter } from "next/navigation";
 import {
   clearAdminSession,
+  createAdminTopic,
   getAccessToken,
   loadAdminGrades,
   loadAdminSubjects,
+  loadAdminTopics,
+  updateAdminTopic,
+  type AdminCurriculumTopic,
+  type AdminCurriculumTopicInput,
   type AdminGradeLevel,
   type AdminSubject,
 } from "../auth/adminAuth";
 import { ActionButtons } from "./components/ActionButtons";
 import { CurriculumShell } from "./CurriculumShell";
 import { Drawer, StatusPill } from "./Shared";
-
-const topics = [
-  {
-    name: "Newton's Second Law",
-    khmer: "ច្បាប់ទីពីររបស់ញូតុន",
-    code: "PHY-10-01",
-    subject: "Physics",
-    grade: "Grade 10",
-    difficulty: "Intermediate",
-    objectives:
-      "Explain how force, mass, and acceleration connect in real examples.",
-    description:
-      "Covers force diagrams, F = ma calculations, and applied motion problems.",
-    status: "Active",
-  },
-  {
-    name: "Quadratic Equations",
-    khmer: "សមីការដឺក្រេទីពីរ",
-    code: "MAT-11-04",
-    subject: "Math",
-    grade: "Grade 11",
-    difficulty: "Advanced",
-    objectives:
-      "Solve quadratic equations by factoring, completing the square, and formula.",
-    description:
-      "Builds algebraic fluency through graph interpretation and equation solving.",
-    status: "Active",
-  },
-  {
-    name: "Balancing Equations",
-    khmer: "ការថ្លឹងសមីការគីមី",
-    code: "CHE-12-02",
-    subject: "Chemistry",
-    grade: "Grade 12",
-    difficulty: "Beginner",
-    objectives:
-      "Balance chemical equations while preserving atom counts on both sides.",
-    description:
-      "Introduces coefficients, conservation of mass, and common reaction patterns.",
-    status: "Draft",
-  },
-];
 
 const difficulties = ["All Levels", "Beginner", "Intermediate", "Advanced"] as const;
 
@@ -70,14 +33,28 @@ const difficultyClasses: Record<string, string> = {
   Advanced: "bg-rose-500/15 text-rose-300",
 };
 
-type Topic = (typeof topics)[number];
+function splitLines(value: string): string[] {
+  return value.split(/\n|,/).map((item) => item.trim()).filter(Boolean);
+}
+
+type Topic = AdminCurriculumTopic;
+type TopicForm = {
+  name: string;
+  khmer: string;
+  code: string;
+  difficulty: AdminCurriculumTopic["difficulty"];
+  objectives: string;
+  prerequisites: string;
+  description: string;
+  status: AdminCurriculumTopic["status"];
+};
 type TopicDrawerState =
   | { mode: "add"; topic?: undefined }
   | { mode: "edit" | "duplicate"; topic: Topic };
 
 export function TopicsPage() {
   const router = useRouter();
-  const [topicRows, setTopicRows] = useState<Topic[]>(topics);
+  const [topicRows, setTopicRows] = useState<Topic[]>([]);
   const [drawerState, setDrawerState] = useState<TopicDrawerState | null>(null);
   const [grades, setGrades] = useState<AdminGradeLevel[]>([]);
   const [subjects, setSubjects] = useState<AdminSubject[]>([]);
@@ -86,6 +63,10 @@ export function TopicsPage() {
   const [difficultyFilter, setDifficultyFilter] =
     useState<(typeof difficulties)[number]>("All Levels");
   const [page, setPage] = useState(1);
+  const [search, setSearch] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!getAccessToken()) {
@@ -99,8 +80,10 @@ export function TopicsPage() {
         if (!isMounted) return;
         setGrades(loadedGrades);
         setSubjects(loadedSubjects.filter((subject) => subject.status !== "Inactive"));
+        setError(null);
       })
       .catch((loadError) => {
+        if (isMounted) setError(loadError instanceof Error ? loadError.message : "Unable to load topics.");
         if (
           loadError instanceof Error &&
           (loadError.message.includes("Admin session") ||
@@ -110,6 +93,9 @@ export function TopicsPage() {
           clearAdminSession();
           router.replace("/auth/Login");
         }
+      })
+      .finally(() => {
+        if (isMounted) setIsLoading(false);
       });
 
     return () => {
@@ -131,47 +117,99 @@ export function TopicsPage() {
 
   useEffect(() => {
     if (!selectedGrade && gradeOptions.length) {
-      setSelectedGrade(gradeOptions[0]);
+      queueMicrotask(() => setSelectedGrade(gradeOptions[0]));
       return;
     }
 
     if (selectedGrade && subjectOptions.length && !subjectOptions.includes(selectedSubject)) {
-      setSelectedSubject(subjectOptions[0]);
+      queueMicrotask(() => setSelectedSubject(subjectOptions[0]));
     }
   }, [gradeOptions, selectedGrade, selectedSubject, subjectOptions]);
+
+  useEffect(() => {
+    const grade = grades.find((item) => item.name === selectedGrade);
+    const subject = subjects.find((item) => item.name === selectedSubject && item.grade === selectedGrade);
+    if (!grade || !subject) return;
+
+    let isMounted = true;
+    const loadTimer = window.setTimeout(() => {
+      setIsLoading(true);
+      void loadAdminTopics({ grade_level_id: grade.grade_level_id, subject_id: subject.subject_id })
+      .then((loadedTopics) => {
+        if (!isMounted) return;
+        setTopicRows(loadedTopics);
+        setError(null);
+      })
+      .catch((loadError) => {
+        if (isMounted) setError(loadError instanceof Error ? loadError.message : "Unable to load topics.");
+      })
+      .finally(() => {
+        if (isMounted) setIsLoading(false);
+      });
+    }, 0);
+
+    return () => { isMounted = false; window.clearTimeout(loadTimer); };
+  }, [grades, selectedGrade, selectedSubject, subjects]);
 
   const filteredTopics = useMemo(
     () =>
       topicRows.filter(
         (topic) =>
-          topic.grade === selectedGrade &&
-          topic.subject === selectedSubject &&
+          (!selectedGrade || topic.grade === selectedGrade) &&
+          (!selectedSubject || topic.subject === selectedSubject) &&
           (difficultyFilter === "All Levels" ||
-            topic.difficulty === difficultyFilter),
+            topic.difficulty === difficultyFilter) &&
+          (!search || `${topic.name} ${topic.khmer} ${topic.code}`.toLowerCase().includes(search.toLowerCase())),
       ),
-    [difficultyFilter, selectedGrade, selectedSubject, topicRows],
+    [difficultyFilter, search, selectedGrade, selectedSubject, topicRows],
   );
 
-  function saveTopic(topic: Topic) {
-    setTopicRows((currentTopics) => {
-      if (drawerState?.mode === "edit") {
-        return currentTopics.map((currentTopic) =>
-          currentTopic.code === drawerState.topic.code ? topic : currentTopic,
-        );
-      }
+  async function saveTopic(form: TopicForm) {
+    const grade = grades.find((item) => item.name === selectedGrade);
+    const subject = subjects.find((item) => item.name === selectedSubject && item.grade === selectedGrade);
+    if (!grade || !subject) {
+      setError("Select a valid grade and subject before saving a topic.");
+      return;
+    }
 
-      return [{ ...topic, code: topic.code || `TOP-${currentTopics.length + 1}` }, ...currentTopics];
-    });
-    setDrawerState(null);
-    setPage(1);
+    const input: AdminCurriculumTopicInput = {
+      grade_level_id: grade.grade_level_id,
+      subject_id: subject.subject_id,
+      name: form.name,
+      khmer: form.khmer,
+      code: form.code,
+      description: form.description,
+      learning_objectives: splitLines(form.objectives),
+      prerequisites: splitLines(form.prerequisites),
+      difficulty: form.difficulty,
+      status: form.status,
+    };
+    setIsSaving(true);
+    setError(null);
+    try {
+      const saved = drawerState?.mode === "edit"
+        ? await updateAdminTopic(drawerState.topic.topic_id, input)
+        : await createAdminTopic(input);
+      setTopicRows((current) => drawerState?.mode === "edit"
+        ? current.map((item) => item.topic_id === saved.topic_id ? saved : item)
+        : [saved, ...current]);
+      setDrawerState(null);
+      setPage(1);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Unable to save topic.");
+    } finally {
+      setIsSaving(false);
+    }
   }
 
-  function setTopicDraft(code: string) {
-    setTopicRows((currentTopics) =>
-      currentTopics.map((topic) =>
-        topic.code === code ? { ...topic, status: "Draft" } : topic,
-      ),
-    );
+  async function setTopicDraft(topic: Topic) {
+    setError(null);
+    try {
+      const updated = await updateAdminTopic(topic.topic_id, { status: "Draft" });
+      setTopicRows((current) => current.map((item) => item.topic_id === updated.topic_id ? updated : item));
+    } catch (statusError) {
+      setError(statusError instanceof Error ? statusError.message : "Unable to save the topic as a draft.");
+    }
   }
 
   return (
@@ -180,6 +218,8 @@ export function TopicsPage() {
       title={`${selectedSubject} Topics`}
       subtitle={`Choose a grade and subject before adding topics for ${selectedGrade}.`}
       searchPlaceholder="Search topics, codes..."
+      searchValue={search}
+      onSearchChange={(value) => { setSearch(value); setPage(1); }}
       actionLabel="Add Topic"
       onAction={() => setDrawerState({ mode: "add" })}
     >
@@ -208,19 +248,23 @@ export function TopicsPage() {
           setPage(1);
         }}
       />
-      <TopicTable
+      {error && <p role="alert" className="mb-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-sm font-semibold text-rose-200">{error}</p>}
+      {isLoading ? (
+        <section className="rounded-xl border border-line bg-surface p-8 text-sm font-semibold text-slate-400">Loading topics…</section>
+      ) : <TopicTable
         topics={filteredTopics}
         page={page}
         onPageChange={setPage}
         onEdit={(topic) => setDrawerState({ mode: "edit", topic })}
         onDuplicate={(topic) => setDrawerState({ mode: "duplicate", topic })}
-        onDraft={setTopicDraft}
-      />
+        onDeactivate={setTopicDraft}
+      />}
       {drawerState && (
         <TopicModal
           state={drawerState}
           onClose={() => setDrawerState(null)}
           onSave={saveTopic}
+          isSaving={isSaving}
           context={{
             grade: selectedGrade,
             subject: selectedSubject,
@@ -282,14 +326,14 @@ function TopicTable({
   onPageChange,
   onEdit,
   onDuplicate,
-  onDraft,
+  onDeactivate,
 }: {
   topics: Topic[];
   page: number;
   onPageChange: (page: number) => void;
   onEdit: (topic: Topic) => void;
   onDuplicate: (topic: Topic) => void;
-  onDraft: (code: string) => void;
+  onDeactivate: (topic: Topic) => void;
 }) {
   const pageSize = 3;
   const totalPages = Math.max(1, Math.ceil(topics.length / pageSize));
@@ -297,10 +341,10 @@ function TopicTable({
   const visibleTopics = topics.slice((safePage - 1) * pageSize, safePage * pageSize);
 
   return (
-    <section className="overflow-hidden rounded-xl border border-[#243856] bg-[#0b1324] shadow-[0_18px_45px_rgba(0,0,0,0.2)]">
+    <section className="overflow-hidden rounded-xl border border-line bg-surface shadow-card">
       <div className="overflow-x-auto">
         <table className="w-full min-w-[980px] text-left">
-          <thead className="bg-[#101a2b] text-xs uppercase text-slate-500">
+          <thead className="bg-surface-2 text-xs uppercase text-slate-500">
             <tr>
               <th className="px-6 py-4 font-extrabold">Topic Name</th>
               <th className="px-6 py-4 font-extrabold">Code</th>
@@ -311,18 +355,18 @@ function TopicTable({
               <th className="px-6 py-4 text-right font-extrabold">Actions</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-[#243856]">
+          <tbody className="divide-y divide-line">
             {visibleTopics.map((topic) => (
               <tr
-                key={topic.code}
-                className="text-sm transition hover:bg-[#101a2b]/55"
+                key={topic.topic_id}
+                className="text-sm transition hover:bg-surface-2/55"
               >
                 <td className="px-6 py-6">
-                  <p className="font-bold text-white">{topic.name}</p>
+                  <p className="font-bold text-fg">{topic.name}</p>
                   <p className="mt-1 text-xs text-slate-500">{topic.khmer}</p>
                 </td>
                 <td className="px-6 py-6">
-                  <span className="font-bold text-[#1fc7e9]">{topic.code}</span>
+                  <span className="font-bold text-info">{topic.code}</span>
                 </td>
                 <td className="px-6 py-6 font-semibold text-slate-300">
                   {topic.subject}
@@ -340,7 +384,7 @@ function TopicTable({
                   <ActionButtons
                     onEdit={() => onEdit(topic)}
                     onDuplicate={() => onDuplicate(topic)}
-                    onDeactivate={() => onDraft(topic.code)}
+                    onDeactivate={() => onDeactivate(topic)}
                     deactivateLabel="Set draft"
                   />
                 </td>
@@ -370,11 +414,13 @@ function TopicModal({
   state,
   onClose,
   onSave,
+  isSaving,
   context,
 }: {
   state: TopicDrawerState;
   onClose: () => void;
-  onSave: (topic: Topic) => void;
+  onSave: (topic: TopicForm) => void;
+  isSaving: boolean;
   context: {
     grade: string;
     subject: string;
@@ -401,14 +447,13 @@ function TopicModal({
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
-    const nextTopic: Topic = {
+    const nextTopic: TopicForm = {
       name: String(formData.get("name") || "Untitled Topic"),
-      khmer: topic?.khmer ?? "Curriculum topic",
+      khmer: String(formData.get("khmer") || ""),
       code: String(formData.get("code") || ""),
-      subject,
-      grade,
-      difficulty: String(formData.get("difficulty") || "Beginner"),
+      difficulty: String(formData.get("difficulty") || "Beginner") as TopicForm["difficulty"],
       objectives: String(formData.get("objectives") || ""),
+      prerequisites: String(formData.get("prerequisites") || ""),
       description: String(formData.get("description") || ""),
       status: formData.get("status") ? "Active" : "Draft",
     };
@@ -442,6 +487,12 @@ function TopicModal({
               state.mode === "duplicate" && topic ? `${topic.name} Copy` : topic?.name
             }
           />
+          <NamedField
+            name="khmer"
+            label="Khmer Name"
+            placeholder="ឈ្មោះប្រធានបទជាភាសាខ្មែរ"
+            defaultValue={topic?.khmer}
+          />
           <div className="grid gap-4 sm:grid-cols-2">
             <NamedField
               name="code"
@@ -464,7 +515,13 @@ function TopicModal({
             name="objectives"
             label="Learning Objectives"
             placeholder="What should students be able to do?"
-            defaultValue={topic?.objectives}
+            defaultValue={topic?.learning_objectives.join("\n")}
+          />
+          <NamedTextArea
+            name="prerequisites"
+            label="Prerequisites"
+            placeholder="One prerequisite per line"
+            defaultValue={topic?.prerequisites.join("\n")}
           />
           <NamedTextArea
             name="description"
@@ -474,7 +531,7 @@ function TopicModal({
           />
           <NamedStatusToggle defaultChecked={topic?.status !== "Draft"} />
         </div>
-        <TopicDrawerActions primaryLabel={primaryLabel} onClose={onClose} />
+        <TopicDrawerActions primaryLabel={isSaving ? "Saving…" : primaryLabel} onClose={onClose} disabled={isSaving} />
       </form>
     </Drawer>
   );
@@ -493,13 +550,13 @@ function SelectField({
 }) {
   return (
     <label className="block">
-      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-[#8da7d8]">
+      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-accent-fg">
         {label}
       </span>
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="h-12 w-full rounded-lg border border-[#3b5d8f] bg-[#101a2b] px-4 text-sm font-medium text-slate-100 outline-none transition focus:border-[#6f7cff] focus:ring-2 focus:ring-[#5368ff]/20"
+        className="h-12 w-full rounded-lg border border-line-strong bg-surface-2 px-4 text-sm font-medium text-slate-100 outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/20"
       >
         {options.map((option) => (
           <option key={option}>{option}</option>
@@ -518,10 +575,10 @@ function ReadOnlyField({
 }) {
   return (
     <label className="block">
-      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-[#8da7d8]">
+      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-accent-fg">
         {label}
       </span>
-      <div className="flex h-12 items-center rounded-lg border border-[#3b5d8f] bg-[#101a2b] px-4 text-sm font-semibold text-cyan-300">
+      <div className="flex h-12 items-center rounded-lg border border-line-strong bg-surface-2 px-4 text-sm font-semibold text-cyan-300">
         {value}
       </div>
     </label>
@@ -541,12 +598,12 @@ function NamedField({
 }) {
   return (
     <label className="block">
-      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-[#8da7d8]">
+      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-accent-fg">
         {label}
       </span>
       <input
         name={name}
-        className="h-12 w-full rounded-lg border border-[#3b5d8f] bg-[#101a2b] px-4 text-sm font-medium text-slate-100 outline-none transition placeholder:text-slate-400/70 focus:border-[#6f7cff] focus:ring-2 focus:ring-[#5368ff]/20"
+        className="h-12 w-full rounded-lg border border-line-strong bg-surface-2 px-4 text-sm font-medium text-slate-100 outline-none transition placeholder:text-slate-400/70 focus:border-brand focus:ring-2 focus:ring-brand/20"
         placeholder={placeholder}
         defaultValue={defaultValue}
       />
@@ -567,12 +624,12 @@ function NamedTextArea({
 }) {
   return (
     <label className="block">
-      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-[#8da7d8]">
+      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-accent-fg">
         {label}
       </span>
       <textarea
         name={name}
-        className="min-h-28 w-full resize-none rounded-lg border border-[#3b5d8f] bg-[#101a2b] px-4 py-3 text-sm font-medium leading-6 text-slate-100 outline-none transition placeholder:text-slate-400/70 focus:border-[#6f7cff] focus:ring-2 focus:ring-[#5368ff]/20"
+        className="min-h-28 w-full resize-none rounded-lg border border-line-strong bg-surface-2 px-4 py-3 text-sm font-medium leading-6 text-slate-100 outline-none transition placeholder:text-slate-400/70 focus:border-brand focus:ring-2 focus:ring-brand/20"
         placeholder={placeholder}
         defaultValue={defaultValue}
       />
@@ -593,13 +650,13 @@ function NamedSelectField({
 }) {
   return (
     <label className="block">
-      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-[#8da7d8]">
+      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-accent-fg">
         {label}
       </span>
       <select
         name={name}
         defaultValue={value}
-        className="h-12 w-full rounded-lg border border-[#3b5d8f] bg-[#101a2b] px-4 text-sm font-medium text-slate-100 outline-none transition focus:border-[#6f7cff] focus:ring-2 focus:ring-[#5368ff]/20"
+        className="h-12 w-full rounded-lg border border-line-strong bg-surface-2 px-4 text-sm font-medium text-slate-100 outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/20"
       >
         {options.map((option) => (
           <option key={option}>{option}</option>
@@ -623,7 +680,7 @@ function DifficultyPill({ difficulty }: { difficulty: string }) {
 
 function NamedStatusToggle({ defaultChecked }: { defaultChecked: boolean }) {
   return (
-    <label className="flex items-center justify-between rounded-lg border border-[#3b5d8f] bg-[#101a2b] p-4">
+    <label className="flex items-center justify-between rounded-lg border border-line-strong bg-surface-2 p-4">
       <span>
         <span className="block text-sm font-semibold text-slate-50">Publish Status</span>
         <span className="text-xs font-medium text-slate-400">
@@ -643,22 +700,26 @@ function NamedStatusToggle({ defaultChecked }: { defaultChecked: boolean }) {
 function TopicDrawerActions({
   primaryLabel,
   onClose,
+  disabled,
 }: {
   primaryLabel: string;
   onClose: () => void;
+  disabled?: boolean;
 }) {
   return (
-    <div className="mt-auto grid grid-cols-2 gap-3 border-t border-[#243856] p-6">
+    <div className="mt-auto grid grid-cols-2 gap-3 border-t border-line p-6">
       <button
         type="button"
         onClick={onClose}
-        className="h-12 rounded-lg border border-[#3b5d8f] bg-[#101a2b] text-sm font-bold text-slate-100 transition hover:border-[#6f7cff] hover:bg-[#0b1324]"
+        disabled={disabled}
+        className="h-12 rounded-lg border border-line-strong bg-surface-2 text-sm font-bold text-slate-100 transition hover:border-brand hover:bg-surface"
       >
         Cancel
       </button>
       <button
         type="submit"
-        className="h-12 rounded-lg bg-gradient-to-r from-[#4367ff] to-[#7a4dff] text-sm font-bold text-white shadow-lg shadow-blue-950/30 transition hover:brightness-110"
+        disabled={disabled}
+        className="h-12 rounded-lg bg-gradient-to-r from-brand to-brand-2 text-sm font-bold text-white shadow-lg shadow-blue-950/30 transition hover:brightness-110"
       >
         {primaryLabel}
       </button>
@@ -678,7 +739,7 @@ function TableFooter({
   onPageChange: (page: number) => void;
 }) {
   return (
-    <div className="flex flex-col gap-4 border-t border-[#243856] px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="flex flex-col gap-4 border-t border-line px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
       <p className="text-xs font-semibold text-slate-600">
         Showing {count ? (page - 1) * 3 + 1 : 0}-{Math.min(page * 3, count)} of{" "}
         {count} topics
@@ -733,8 +794,8 @@ function PageButton({
       onClick={onClick}
       className={`flex h-8 min-w-8 items-center justify-center rounded-lg border px-2 text-sm font-bold transition ${
         active
-          ? "border-transparent bg-gradient-to-r from-[#4367ff] to-[#7a4dff] text-white"
-          : "border-[#243856] bg-[#0b1324] text-slate-500 hover:border-[#5368ff] hover:text-white disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:border-[#243856] disabled:hover:text-slate-500"
+          ? "border-transparent bg-gradient-to-r from-brand to-brand-2 text-white"
+          : "border-line bg-surface text-slate-500 hover:border-brand hover:text-fg disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:border-line disabled:hover:text-slate-500"
       }`}
     >
       {children}

@@ -2,26 +2,59 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import type { ReactNode } from "react";
-import { useEffect, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type RefObject,
+} from "react";
 import {
   adminLogout,
   clearAdminSession,
-  type DashboardNotification,
   getAccessToken,
   getStoredAdminUser,
   loadAdminDashboard,
-  type AdminUser,
   verifyAdminSession,
+  type AdminDashboardData,
+  type AdminUser,
+  type DashboardNotification,
 } from "../auth/adminAuth";
-import { curriculumLinks } from "../curriculum/data";
+import { Icon, type IconName } from "./Icon";
+import { usePreferences, useStoredString, type ThemePreference } from "../preferences/Preferences";
+import type { MessageKey } from "../preferences/messages";
 
-type AdminSection =
-  | "Dashboard"
-  | "Curriculum"
-  | "Students"
-  | "Settings";
+type NavItem = { href: string; label: MessageKey; icon: IconName; badge?: "flagged" };
+type NavSection = { label: MessageKey; items: NavItem[] };
+
+export const navSections: NavSection[] = [
+  {
+    label: "nav.overview",
+    items: [
+      { href: "/admin_dashboard", label: "nav.dashboard", icon: "dashboard" },
+      { href: "/ai_reviews", label: "nav.aiReviews", icon: "review", badge: "flagged" },
+      { href: "/students", label: "nav.students", icon: "students" },
+    ],
+  },
+  {
+    label: "nav.curriculum",
+    items: [
+      { href: "/grade_levels", label: "nav.grades", icon: "grades" },
+      { href: "/subjects", label: "nav.subjects", icon: "subjects" },
+      { href: "/topics", label: "nav.topics", icon: "topics" },
+      { href: "/content", label: "nav.content", icon: "content" },
+      { href: "/curriculum_versions", label: "nav.versions", icon: "versions" },
+    ],
+  },
+  {
+    label: "nav.system",
+    items: [{ href: "/settings", label: "nav.settings", icon: "settings" }],
+  },
+];
 
 function isAuthExpiredError(error: unknown) {
   if (!(error instanceof Error)) return false;
@@ -32,391 +65,702 @@ function isAuthExpiredError(error: unknown) {
   );
 }
 
+// Every page mounts its own shell, so share one in-flight bootstrap request for
+// a short window instead of re-fetching the profile and alerts on each click.
+let bootstrapCache: { at: number; promise: Promise<[AdminUser, AdminDashboardData]> } | null = null;
+function loadShellBootstrap() {
+  if (!bootstrapCache || Date.now() - bootstrapCache.at > 30_000) {
+    const promise = Promise.all([verifyAdminSession(), loadAdminDashboard()]);
+    bootstrapCache = { at: Date.now(), promise };
+    promise.catch(() => {
+      bootstrapCache = null;
+    });
+  }
+  return bootstrapCache.promise;
+}
+
 export function AdminShell({
-  active,
   title,
   subtitle,
-  eyebrow = "Admin",
+  eyebrow,
   action,
   profileImage,
-  adminName = "Admin",
-  adminRole = "Admin",
+  adminName,
+  adminRole,
+  dashboard,
+  hideHeading = false,
   children,
 }: {
-  active: AdminSection;
+  /** Kept for existing call sites; the active item now follows the URL. */
+  active?: string;
   title: string;
-  subtitle: string;
+  subtitle?: string;
   eyebrow?: string;
   action?: ReactNode;
   profileImage?: string | null;
   adminName?: string;
   adminRole?: string;
+  /** Pages that already load dashboard data pass it here to avoid a second request. */
+  dashboard?: AdminDashboardData | null;
+  hideHeading?: boolean;
   children: ReactNode;
 }) {
-  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
-  const [isCurriculumOpen, setIsCurriculumOpen] = useState(active === "Curriculum");
-  const [storedUser, setStoredUser] = useState<AdminUser | null>(null);
-  const [notifications, setNotifications] = useState<DashboardNotification[]>([]);
   const router = useRouter();
-  const shouldShowCurriculumLinks = isCurriculumOpen;
-  const displayName = storedUser?.full_name || adminName;
-  const displayProfileImage = profileImage ?? storedUser?.profile_image_url ?? null;
-  const displayRole =
-    storedUser?.role === "administrator" || storedUser?.role === "admin"
-      ? "Admin"
-      : adminRole;
-  const initials = displayName
-    .split(" ")
-    .map((part) => part[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
+  const pathname = usePathname();
+  const { t } = usePreferences();
+  const [storedUser, setStoredUser] = useState<AdminUser | null>(() => getStoredAdminUser());
+  const [fetchedDashboard, setFetchedDashboard] = useState<AdminDashboardData | null>(null);
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [isPaletteOpen, setIsPaletteOpen] = useState(false);
+  const [collapsedValue, setCollapsedValue] = useStoredString("rean_admin_sidebar", "open");
+  const isCollapsed = collapsedValue === "collapsed";
+  const ownsData = dashboard === undefined;
 
   useEffect(() => {
     if (!getAccessToken()) {
       router.replace("/auth/Login");
       return;
     }
-
-    setStoredUser(getStoredAdminUser());
-    Promise.all([verifyAdminSession(), loadAdminDashboard()])
-      .then(([user, dashboard]) => {
-        setStoredUser({
-          ...user,
-          ...dashboard.admin,
-        });
-        setNotifications(dashboard.insights.notifications ?? []);
+    if (!ownsData) return;
+    let cancelled = false;
+    loadShellBootstrap()
+      .then(([user, data]) => {
+        if (cancelled) return;
+        setStoredUser({ ...user, ...data.admin });
+        setFetchedDashboard(data);
       })
       .catch((error) => {
-        if (isAuthExpiredError(error)) {
+        if (!cancelled && isAuthExpiredError(error)) {
           clearAdminSession();
           router.replace("/auth/Login");
         }
       });
-  }, [router]);
+    return () => {
+      cancelled = true;
+    };
+  }, [router, ownsData]);
 
-  async function handleSignOut() {
-    await adminLogout();
-    router.replace("/auth/Login");
+  // Close the phone drawer whenever the route changes.
+  const [drawerPath, setDrawerPath] = useState(pathname);
+  if (drawerPath !== pathname) {
+    setDrawerPath(pathname);
+    setIsDrawerOpen(false);
   }
 
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setIsPaletteOpen((open) => !open);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const data = ownsData ? fetchedDashboard : dashboard;
+  const admin = { ...storedUser, ...data?.admin };
+  const displayName = adminName || admin.full_name || "Admin";
+  const displayImage = profileImage ?? admin.profile_image_url ?? null;
+  const displayRole = adminRole || t("shell.admin");
+  const notifications = data?.insights.notifications ?? [];
+  const flaggedCount = data?.insights.flagged_ai_sessions.length ?? 0;
+
+  const handleSignOut = useCallback(async () => {
+    bootstrapCache = null;
+    await adminLogout();
+    router.replace("/auth/Login");
+  }, [router]);
+
+  const activeItem = navSections
+    .flatMap((section) => section.items)
+    .find((item) => pathname === item.href || pathname.startsWith(`${item.href}/`));
+  const activeSection = navSections.find((section) => activeItem && section.items.includes(activeItem));
+  const crumb = eyebrow ?? (activeSection ? t(activeSection.label) : t("shell.admin"));
+
   return (
-    <main className="min-h-screen bg-[#070b19] text-slate-100">
-      <div className="flex min-h-screen">
-        <aside className="hidden w-[280px] shrink-0 border-r border-[#243856] bg-[#070b19] px-6 py-7 lg:flex lg:flex-col">
-          <Brand />
+    <div className="min-h-screen bg-canvas text-fg lg:flex">
+      <aside
+        className={`sticky top-0 hidden h-screen shrink-0 border-r border-line bg-surface transition-[width] duration-200 lg:flex lg:flex-col ${
+          isCollapsed ? "w-[76px]" : "w-[264px]"
+        }`}
+      >
+        <SidebarContent
+          collapsed={isCollapsed}
+          flaggedCount={flaggedCount}
+          pathname={pathname}
+          onToggleCollapse={() => setCollapsedValue(isCollapsed ? "open" : "collapsed")}
+        />
+      </aside>
 
-          <nav className="mt-10 space-y-2">
-            <Link
-              href="/admin_dashboard"
-              className={`flex h-11 w-full items-center gap-4 rounded-xl px-4 text-left text-sm font-semibold transition ${
-                active === "Dashboard"
-                  ? "bg-gradient-to-r from-[#4367ff] to-[#7a4dff] text-white shadow-lg shadow-blue-950/30"
-                  : "text-slate-500 hover:bg-[#101a2b] hover:text-slate-200"
-              }`}
-            >
-              <SidebarIcon name="dashboard" />
-              Dashboard
-            </Link>
+      {isDrawerOpen && (
+        <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true" aria-label={t("shell.openMenu")}>
+          <button
+            type="button"
+            aria-label={t("shell.closeMenu")}
+            className="absolute inset-0 bg-overlay backdrop-blur-sm"
+            onClick={() => setIsDrawerOpen(false)}
+          />
+          <aside className="relative flex h-full w-[min(300px,86vw)] flex-col border-r border-line bg-surface shadow-2xl">
+            <SidebarContent
+              collapsed={false}
+              flaggedCount={flaggedCount}
+              pathname={pathname}
+              onClose={() => setIsDrawerOpen(false)}
+            />
+          </aside>
+        </div>
+      )}
 
-            <div className={shouldShowCurriculumLinks ? "rounded-xl bg-[#0b1324]" : "h-11 overflow-hidden"}>
-              <button
-                type="button"
-                onClick={() => setIsCurriculumOpen((isOpen) => !isOpen)}
-                className="flex h-11 w-full items-center gap-4 rounded-xl bg-transparent px-4 text-left text-sm font-semibold text-slate-500 transition hover:bg-[#101a2b] hover:text-slate-200"
-                aria-expanded={isCurriculumOpen}
-              >
-                <SidebarIcon name="curriculum" />
-                Curriculum
-                <span className={`ml-auto flex h-5 w-5 items-center justify-center text-[#7da6e6] transition-transform ${shouldShowCurriculumLinks ? "rotate-180" : "rotate-0"}`}>
-                  <ChevronDownIcon />
-                </span>
-              </button>
-              {shouldShowCurriculumLinks && (
-                <div className="space-y-2 px-4 pb-4 pl-[60px]">
-                  {curriculumLinks.map((item) => (
-                    <Link
-                      key={item.label}
-                      href={item.href}
-                      className="flex h-11 w-full items-center rounded-lg px-4 text-sm font-bold text-[#6f89b4] transition hover:bg-[#101a2b] hover:text-slate-200"
-                    >
-                      {item.label}
-                    </Link>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <Link
-              href="/students"
-              className={`flex h-11 w-full items-center gap-4 rounded-xl px-4 text-left text-sm font-semibold transition ${
-                active === "Students"
-                  ? "bg-gradient-to-r from-[#4367ff] to-[#7a4dff] text-white shadow-lg shadow-blue-950/30"
-                  : "text-slate-500 hover:bg-[#101a2b] hover:text-slate-200"
-              }`}
-            >
-              <SidebarIcon name="students" />
-              Students
-            </Link>
-            <Link
-              href="/settings"
-              className={`flex h-11 w-full items-center gap-4 rounded-xl px-4 text-left text-sm font-semibold transition ${
-                active === "Settings"
-                  ? "bg-gradient-to-r from-[#4367ff] to-[#7a4dff] text-white shadow-lg shadow-blue-950/30"
-                  : "text-slate-500 hover:bg-[#101a2b] hover:text-slate-200"
-              }`}
-            >
-              <SidebarIcon name="settings" />
-              Settings
-            </Link>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="sticky top-0 z-40 flex h-16 items-center gap-3 border-b border-line bg-canvas/85 px-4 backdrop-blur-md sm:px-6">
+          <button
+            type="button"
+            onClick={() => setIsDrawerOpen(true)}
+            className="-ml-1 grid h-10 w-10 place-items-center rounded-lg text-slate-400 hover:bg-surface-2 hover:text-fg lg:hidden"
+            aria-label={t("shell.openMenu")}
+          >
+            <Icon name="menu" />
+          </button>
+          <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-2 text-sm">
+            <span className="hidden text-slate-500 sm:inline">{crumb}</span>
+            <Icon name="chevronRight" className="hidden h-3.5 w-3.5 text-slate-600 sm:block" />
+            <span className="truncate font-semibold text-fg">{title}</span>
           </nav>
 
-          <div className="mt-auto">
-            <div className="flex items-center gap-3 px-4 py-3">
-              <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-gradient-to-r from-[#4367ff] to-[#7a4dff] text-sm font-bold">
-                {displayProfileImage ? (
-                  <img
-                    src={displayProfileImage}
-                    alt={`${displayName} admin profile`}
-                    className="h-full w-full object-cover"
-                  />
-                ) : (
-                  initials || "A"
-                )}
-              </div>
-              <div>
-                <p className="text-sm font-bold text-white">{displayName}</p>
-                <button
-                  type="button"
-                  onClick={handleSignOut}
-                  className="text-xs font-semibold text-rose-400 transition hover:text-rose-300"
-                >
-                  Sign out
-                </button>
-              </div>
-            </div>
+          <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
+            <button
+              type="button"
+              onClick={() => setIsPaletteOpen(true)}
+              className="hidden h-9 items-center gap-2 rounded-lg border border-line bg-surface px-3 text-sm text-slate-500 transition hover:border-line-strong hover:text-fg md:flex"
+            >
+              <Icon name="search" className="h-4 w-4" />
+              <span className="w-28 text-left">{t("shell.jumpTo")}</span>
+              <kbd className="rounded border border-line bg-surface-2 px-1.5 font-sans text-[11px] text-slate-500">⌘K</kbd>
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsPaletteOpen(true)}
+              className="grid h-9 w-9 place-items-center rounded-lg text-slate-400 hover:bg-surface-2 hover:text-fg md:hidden"
+              aria-label={t("shell.jumpTo")}
+            >
+              <Icon name="search" className="h-[18px] w-[18px]" />
+            </button>
+            <LanguageToggle />
+            <NotificationsButton notifications={notifications} />
+            <ProfileMenu
+              name={displayName}
+              email={admin.email}
+              role={displayRole}
+              image={displayImage}
+              onSignOut={handleSignOut}
+            />
           </div>
-        </aside>
+        </header>
 
-        <section className="flex min-w-0 flex-1 flex-col">
-          <header className="flex h-20 items-center justify-between border-b border-[#243856] bg-[#0b1324] px-5 md:px-10">
-            <div className="flex min-w-0 items-center gap-3 text-sm font-semibold">
-              <Image
-                src="/AI Tutor_Logo.png"
-                alt="Rean AI logo"
-                width={42}
-                height={42}
-                className="h-10 w-10 object-contain lg:hidden"
-                priority
-              />
-              <span className="hidden text-slate-500 sm:inline">{eyebrow}</span>
-              <span className="hidden text-slate-600 sm:inline">/</span>
-              <span className="text-slate-200">{title}</span>
-            </div>
-
-            <div className="relative flex items-center gap-4">
-              <button
-                type="button"
-                onClick={() => setIsNotificationsOpen((isOpen) => !isOpen)}
-                className="relative hidden h-11 w-11 items-center justify-center rounded-full border border-[#243856] bg-[#101a2b] text-[#7da6e6] shadow-[0_12px_30px_rgba(0,0,0,0.18)] transition hover:border-[#5368ff] hover:text-white sm:flex"
-                aria-label="Notifications"
-                aria-expanded={isNotificationsOpen}
-              >
-                <NotificationIcon />
-                {notifications.length > 0 && (
-                  <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-[#5368ff]" />
-                )}
-              </button>
-              {isNotificationsOpen && (
-                <NotificationsPanel
-                  notifications={notifications}
-                  onClose={() => setIsNotificationsOpen(false)}
-                />
-              )}
-              <div className="hidden text-right sm:block">
-                <p className="text-sm font-bold text-white">{displayName}</p>
-                <p className="text-xs text-slate-500">{displayRole}</p>
-              </div>
-              <div className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-full border-2 border-[#5368ff] bg-gradient-to-br from-[#4367ff] to-[#7a4dff] text-sm font-extrabold text-white">
-                {displayProfileImage ? (
-                  <img
-                    src={displayProfileImage}
-                    alt={`${displayName} admin profile`}
-                    className="h-full w-full object-cover"
-                  />
-                ) : (
-                  initials || "A"
-                )}
-              </div>
-            </div>
-          </header>
-
-          <div className="mx-auto w-full max-w-[1120px] flex-1 px-5 py-8 md:px-8 lg:py-12">
+        <main className="mx-auto w-full max-w-[1240px] flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+          {!hideHeading && (
             <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-              <div>
-                <h1 className="text-3xl font-extrabold tracking-tight text-white">
-                  {title}
-                </h1>
-                <p className="mt-2 text-sm leading-6 text-slate-500">
-                  {subtitle}
-                </p>
+              <div className="min-w-0">
+                <h1 className="text-2xl font-bold tracking-tight text-fg sm:text-[28px]">{title}</h1>
+                {subtitle && <p className="mt-1.5 max-w-2xl text-sm leading-6 text-slate-500">{subtitle}</p>}
               </div>
               {action}
             </div>
-
-            {children}
-          </div>
-        </section>
+          )}
+          {children}
+        </main>
       </div>
-    </main>
-  );
-}
 
-function Brand() {
-  return (
-    <div className="flex items-center gap-3">
-      <Image
-        src="/AI Tutor_Logo.png"
-        alt="Rean AI logo"
-        width={50}
-        height={50}
-        className="h-12 w-12 object-contain"
-        priority
-      />
-      <span className="text-xl font-bold tracking-tight text-white">Rean AI</span>
+      {isPaletteOpen && (
+        <CommandPalette onClose={() => setIsPaletteOpen(false)} onSignOut={handleSignOut} />
+      )}
     </div>
   );
 }
 
-function ChevronDownIcon() {
+export function initialsOf(name: string) {
   return (
-    <svg
-      viewBox="0 0 24 24"
-      className="h-4 w-4"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.4"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="m6 9 6 6 6-6" />
-    </svg>
+    name
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((part) => part[0])
+      .join("")
+      .slice(0, 2)
+      .toUpperCase() || "A"
   );
 }
 
-function SidebarIcon({ name }: { name: string }) {
-  const iconClass = "h-5 w-5";
+function Brand({ collapsed }: { collapsed: boolean }) {
+  const { t } = usePreferences();
+  return (
+    <Link href="/admin_dashboard" className="flex min-w-0 items-center gap-3">
+      <Image
+        src="/AI Tutor_Logo.png"
+        alt="Rean AI"
+        width={40}
+        height={40}
+        className="h-10 w-10 shrink-0 object-contain"
+        priority
+      />
+      {!collapsed && (
+        <span className="min-w-0">
+          <span className="block text-[17px] font-bold leading-tight tracking-tight text-fg">
+            Rean <span className="font-khmer text-brand">រៀន</span> AI
+          </span>
+          <span className="block truncate text-[11px] font-medium text-slate-500">{t("shell.tagline")}</span>
+        </span>
+      )}
+    </Link>
+  );
+}
+
+function SidebarContent({
+  collapsed,
+  flaggedCount,
+  pathname,
+  onToggleCollapse,
+  onClose,
+}: {
+  collapsed: boolean;
+  flaggedCount: number;
+  pathname: string;
+  onToggleCollapse?: () => void;
+  onClose?: () => void;
+}) {
+  const { t } = usePreferences();
+  return (
+    <>
+      <div className={`flex h-16 shrink-0 items-center border-b border-line ${collapsed ? "justify-center px-2" : "justify-between px-5"}`}>
+        <Brand collapsed={collapsed} />
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            className="grid h-9 w-9 place-items-center rounded-lg text-slate-400 hover:bg-surface-2 hover:text-fg"
+            aria-label={t("shell.closeMenu")}
+          >
+            <Icon name="close" />
+          </button>
+        )}
+      </div>
+
+      <nav className="flex-1 overflow-y-auto px-3 py-4" aria-label="Main">
+        {navSections.map((section) => (
+          <div key={section.label} className="mb-5 last:mb-0">
+            {collapsed ? (
+              <div className="mx-auto mb-2 h-px w-6 bg-line" />
+            ) : (
+              <p className="mb-1.5 px-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                {t(section.label)}
+              </p>
+            )}
+            <ul className="space-y-0.5">
+              {section.items.map((item) => {
+                const isActive = pathname === item.href || pathname.startsWith(`${item.href}/`);
+                const badge = item.badge === "flagged" && flaggedCount > 0 ? flaggedCount : 0;
+                return (
+                  <li key={item.href}>
+                    <Link
+                      href={item.href}
+                      title={collapsed ? t(item.label) : undefined}
+                      aria-current={isActive ? "page" : undefined}
+                      className={`group relative flex h-10 items-center gap-3 rounded-lg text-sm font-medium transition ${
+                        collapsed ? "justify-center" : "px-3"
+                      } ${
+                        isActive
+                          ? "bg-brand/12 text-fg"
+                          : "text-slate-400 hover:bg-surface-2 hover:text-fg"
+                      }`}
+                    >
+                      {isActive && <span className="absolute inset-y-2 left-0 w-[3px] rounded-r-full brand-gradient" />}
+                      <span className={isActive ? "text-brand" : ""}>
+                        <Icon name={item.icon} className="h-[18px] w-[18px]" />
+                      </span>
+                      {!collapsed && <span className="truncate">{t(item.label)}</span>}
+                      {badge > 0 &&
+                        (collapsed ? (
+                          <span className="absolute right-2.5 top-2 h-2 w-2 rounded-full bg-rose-500" />
+                        ) : (
+                          <span className="ml-auto rounded-full bg-rose-500/15 px-2 py-0.5 text-[11px] font-semibold text-rose-300">
+                            {badge}
+                          </span>
+                        ))}
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ))}
+      </nav>
+
+      {onToggleCollapse && (
+        <div className="border-t border-line p-3">
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            className={`flex h-9 w-full items-center gap-3 rounded-lg text-sm text-slate-500 transition hover:bg-surface-2 hover:text-fg ${collapsed ? "justify-center" : "px-3"}`}
+            aria-label={collapsed ? t("shell.expand") : t("shell.collapse")}
+            title={collapsed ? t("shell.expand") : undefined}
+          >
+            <Icon name={collapsed ? "chevronRight" : "chevronLeft"} className="h-4 w-4" />
+            {!collapsed && t("shell.collapse")}
+          </button>
+        </div>
+      )}
+      {onClose && (
+        <div className="space-y-3 border-t border-line p-4">
+          <ThemeSegmented />
+        </div>
+      )}
+    </>
+  );
+}
+
+function useDismiss(ref: RefObject<HTMLElement | null>, open: boolean, onClose: () => void) {
+  useEffect(() => {
+    if (!open) return;
+    function onPointer(event: PointerEvent) {
+      if (ref.current && !ref.current.contains(event.target as Node)) onClose();
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    document.addEventListener("pointerdown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [ref, open, onClose]);
+}
+
+function LanguageToggle() {
+  const { lang, setLang, t } = usePreferences();
+  return (
+    <button
+      type="button"
+      onClick={() => setLang(lang === "en" ? "km" : "en")}
+      className="flex h-9 items-center gap-1.5 rounded-lg px-2 text-sm font-semibold text-slate-400 transition hover:bg-surface-2 hover:text-fg"
+      aria-label={t("shell.switchLanguage")}
+      title={t("shell.switchLanguage")}
+    >
+      <Icon name="globe" className="h-[18px] w-[18px]" />
+      <span className={lang === "en" ? "font-khmer" : ""}>{lang === "en" ? "ខ្មែរ" : "EN"}</span>
+    </button>
+  );
+}
+
+function NotificationsButton({ notifications }: { notifications: DashboardNotification[] }) {
+  const { t } = usePreferences();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const close = useCallback(() => setOpen(false), []);
+  useDismiss(ref, open, close);
 
   return (
-    <span className="flex w-7 justify-center">
-      {name === "dashboard" && (
-        <svg className={iconClass} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M4 5h6v6H4V5Zm10 0h6v6h-6V5ZM4 15h6v4H4v-4Zm10 0h6v4h-6v-4Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-        </svg>
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="relative grid h-9 w-9 place-items-center rounded-lg text-slate-400 transition hover:bg-surface-2 hover:text-fg"
+        aria-label={t("shell.notifications")}
+        aria-expanded={open}
+      >
+        <Icon name="bell" className="h-[18px] w-[18px]" />
+        {notifications.length > 0 && (
+          <span className="absolute right-1.5 top-1.5 grid h-4 min-w-4 place-items-center rounded-full bg-rose-500 px-1 text-[10px] font-bold leading-none text-white ring-2 ring-canvas">
+            {notifications.length > 9 ? "9+" : notifications.length}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="fixed inset-x-3 top-[68px] z-50 overflow-hidden rounded-xl border border-line bg-surface shadow-card sm:absolute sm:inset-x-auto sm:right-0 sm:top-11 sm:w-[360px]">
+          <div className="border-b border-line px-4 py-3">
+            <p className="text-sm font-semibold text-fg">{t("shell.notifications")}</p>
+            <p className="text-xs text-slate-500">{t("shell.notificationsSub")}</p>
+          </div>
+          <ul className="max-h-[60vh] divide-y divide-line overflow-y-auto">
+            {notifications.length ? (
+              notifications.map((item) => (
+                <li key={item.id} className="flex gap-3 px-4 py-3">
+                  <span
+                    className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
+                      item.tone === "amber" ? "bg-amber-500" : item.tone === "rose" ? "bg-rose-500" : "bg-brand"
+                    }`}
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium text-fg">{item.title}</span>
+                    <span className="mt-0.5 block text-xs leading-5 text-slate-500">{item.body}</span>
+                    <span className="mt-1 block text-[11px] font-medium text-accent-fg">{item.time}</span>
+                  </span>
+                </li>
+              ))
+            ) : (
+              <li className="flex flex-col items-center gap-2 px-4 py-8 text-center text-sm text-slate-500">
+                <Icon name="check" className="h-5 w-5 text-emerald-300" />
+                {t("shell.noNotifications")}
+              </li>
+            )}
+          </ul>
+        </div>
       )}
-      {name === "curriculum" && (
-        <svg className={iconClass} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M5 5.5h7a3 3 0 0 1 3 3v10a3 3 0 0 0-3-3H5v-10Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-          <path d="M19 5.5h-4a3 3 0 0 0-3 3v10a3 3 0 0 1 3-3h4v-10Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-        </svg>
-      )}
-      {name === "students" && (
-        <svg className={iconClass} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7.5 1a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5ZM4 19a5 5 0 0 1 10 0M14 18a4 4 0 0 1 6 0" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-        </svg>
-      )}
-      {name === "settings" && (
-        <svg className={iconClass} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" stroke="currentColor" strokeWidth="1.8" />
-          <path d="M19 12a7.4 7.4 0 0 0-.1-1.2l2-1.5-2-3.4-2.4 1a7.8 7.8 0 0 0-2-1.1L14.2 3h-4.4l-.4 2.8a7.8 7.8 0 0 0-2 1.1l-2.4-1-2 3.4 2 1.5A7.4 7.4 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.4-1a7.8 7.8 0 0 0 2 1.1l.4 2.8h4.4l.4-2.8a7.8 7.8 0 0 0 2-1.1l2.4 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
-        </svg>
+    </div>
+  );
+}
+
+function ThemeSegmented() {
+  const { theme, setTheme, t } = usePreferences();
+  const options: { value: ThemePreference; icon: IconName; label: MessageKey }[] = [
+    { value: "light", icon: "sun", label: "shell.themeLight" },
+    { value: "dark", icon: "moon", label: "shell.themeDark" },
+    { value: "system", icon: "monitor", label: "shell.themeSystem" },
+  ];
+  return (
+    <div>
+      <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500">{t("shell.theme")}</p>
+      <div className="grid grid-cols-3 gap-1 rounded-lg border border-line bg-surface-2 p-1" role="radiogroup" aria-label={t("shell.theme")}>
+        {options.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={theme === option.value}
+            onClick={() => setTheme(option.value)}
+            className={`flex h-8 items-center justify-center gap-1.5 rounded-md text-xs font-medium transition ${
+              theme === option.value ? "bg-surface text-fg shadow-sm" : "text-slate-500 hover:text-fg"
+            }`}
+          >
+            <Icon name={option.icon} className="h-3.5 w-3.5" />
+            {t(option.label)}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Avatar({ name, image, size = "h-9 w-9" }: { name: string; image: string | null; size?: string }) {
+  return (
+    <span className={`grid shrink-0 place-items-center overflow-hidden rounded-full brand-gradient text-xs font-bold text-white ${size}`}>
+      {image ? (
+        // eslint-disable-next-line @next/next/no-img-element -- admin photos are arbitrary uploaded URLs
+        <img src={image} alt="" className="h-full w-full object-cover" />
+      ) : (
+        initialsOf(name)
       )}
     </span>
   );
 }
 
-function NotificationIcon() {
+function ProfileMenu({
+  name,
+  email,
+  role,
+  image,
+  onSignOut,
+}: {
+  name: string;
+  email?: string;
+  role: string;
+  image: string | null;
+  onSignOut: () => void;
+}) {
+  const { lang, setLang, t } = usePreferences();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const close = useCallback(() => setOpen(false), []);
+  useDismiss(ref, open, close);
+
   return (
-    <svg aria-hidden="true" className="h-5 w-5" viewBox="0 0 24 24" fill="none">
-      <path
-        d="M15.5 17.5h-7a2 2 0 0 1-1.7-3.05l.5-.8A4.6 4.6 0 0 0 8 11.2V9.5a4 4 0 0 1 8 0v1.7c0 .87.24 1.72.7 2.45l.5.8a2 2 0 0 1-1.7 3.05Z"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.8"
-      />
-      <path
-        d="M10 19a2.2 2.2 0 0 0 4 0"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeWidth="1.8"
-      />
-    </svg>
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="flex items-center gap-2.5 rounded-full p-0.5 transition hover:bg-surface-2 sm:rounded-lg sm:py-1 sm:pl-1 sm:pr-2"
+        aria-label={t("shell.account")}
+        aria-expanded={open}
+      >
+        <Avatar name={name} image={image} />
+        <span className="hidden text-left xl:block">
+          <span className="block max-w-[140px] truncate text-sm font-semibold leading-tight text-fg">{name}</span>
+          <span className="block text-xs leading-tight text-slate-500">{role}</span>
+        </span>
+      </button>
+      {open && (
+        <div className="absolute right-0 top-12 z-50 w-[280px] overflow-hidden rounded-xl border border-line bg-surface shadow-card">
+          <div className="flex items-center gap-3 border-b border-line p-4">
+            <Avatar name={name} image={image} size="h-10 w-10" />
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold text-fg">{name}</p>
+              <p className="truncate text-xs text-slate-500">{email || role}</p>
+            </div>
+          </div>
+          <div className="space-y-4 p-4">
+            <ThemeSegmented />
+            <div>
+              <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500">{t("shell.language")}</p>
+              <div className="grid grid-cols-2 gap-1 rounded-lg border border-line bg-surface-2 p-1" role="radiogroup" aria-label={t("shell.language")}>
+                {(["en", "km"] as const).map((code) => (
+                  <button
+                    key={code}
+                    type="button"
+                    role="radio"
+                    aria-checked={lang === code}
+                    onClick={() => setLang(code)}
+                    className={`h-8 rounded-md text-xs font-medium transition ${
+                      lang === code ? "bg-surface text-fg shadow-sm" : "text-slate-500 hover:text-fg"
+                    } ${code === "km" ? "font-khmer" : ""}`}
+                  >
+                    {code === "en" ? "English" : "ខ្មែរ"}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div className="border-t border-line p-2">
+            <Link
+              href="/settings"
+              className="flex h-9 items-center gap-3 rounded-lg px-3 text-sm text-slate-300 hover:bg-surface-2 hover:text-fg"
+            >
+              <Icon name="settings" className="h-4 w-4" />
+              {t("nav.settings")}
+            </Link>
+            <button
+              type="button"
+              onClick={onSignOut}
+              className="flex h-9 w-full items-center gap-3 rounded-lg px-3 text-sm text-rose-300 hover:bg-rose-500/10"
+            >
+              <Icon name="logout" className="h-4 w-4" />
+              {t("shell.signOut")}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
-function NotificationsPanel({
-  notifications,
-  onClose,
-}: {
-  notifications: DashboardNotification[];
-  onClose: () => void;
-}) {
-  return (
-    <div className="absolute right-20 top-14 z-30 w-[344px] overflow-hidden rounded-xl border border-[#243856] bg-[#0b1324] text-left shadow-[0_18px_45px_rgba(0,0,0,0.32)]">
-      <div className="flex items-center justify-between border-b border-[#243856] px-5 py-4">
-        <div>
-          <p className="text-sm font-extrabold text-white">Notifications</p>
-          <p className="mt-1 text-xs font-semibold text-slate-500">
-            Platform activity and review alerts
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="flex h-8 w-8 items-center justify-center rounded-full border border-[#243856] text-sm font-bold text-slate-500 transition hover:border-[#5368ff] hover:text-white"
-          aria-label="Close notifications"
-        >
-          x
-        </button>
-      </div>
+type PaletteEntry = { id: string; group: "pages" | "actions"; label: string; hint?: string; icon: IconName; run: () => void };
 
-      <div className="divide-y divide-[#243856]">
-        {notifications.length ? (
-          notifications.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className="flex w-full gap-3 px-5 py-4 text-left transition hover:bg-[#101a2b]"
-            >
-              <span
-                className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${
-                  item.tone === "amber"
-                    ? "bg-amber-300"
-                    : item.tone === "rose"
-                      ? "bg-rose-300"
-                      : "bg-[#5368ff]"
-                }`}
-              />
-              <span className="min-w-0">
-                <span className="block text-sm font-bold text-slate-100">
-                  {item.title}
-                </span>
-                <span className="mt-1 block text-xs font-semibold leading-5 text-slate-500">
-                  {item.body}
-                </span>
-                <span className="mt-1 block text-[11px] font-bold text-[#7da6e6]">
-                  {item.time}
-                </span>
-              </span>
-            </button>
-          ))
-        ) : (
-          <p className="px-5 py-6 text-center text-sm font-semibold text-slate-500">
-            No notifications yet
-          </p>
-        )}
+function CommandPalette({ onClose, onSignOut }: { onClose: () => void; onSignOut: () => void }) {
+  const router = useRouter();
+  const { t, lang, setLang, setTheme } = usePreferences();
+  const [query, setQuery] = useState("");
+  const [cursor, setCursor] = useState(0);
+  const listRef = useRef<HTMLUListElement>(null);
+
+  const entries = useMemo<PaletteEntry[]>(() => {
+    const pages: PaletteEntry[] = navSections.flatMap((section) =>
+      section.items.map((item) => ({
+        id: item.href,
+        group: "pages" as const,
+        label: t(item.label),
+        hint: t(section.label),
+        icon: item.icon,
+        run: () => router.push(item.href),
+      })),
+    );
+    const actions: PaletteEntry[] = [
+      {
+        id: "lang",
+        group: "actions",
+        label: lang === "en" ? "ប្ដូរទៅភាសាខ្មែរ · Switch to Khmer" : "Switch to English · ប្ដូរទៅភាសាអង់គ្លេស",
+        icon: "globe",
+        run: () => setLang(lang === "en" ? "km" : "en"),
+      },
+      { id: "light", group: "actions", label: `${t("shell.theme")}: ${t("shell.themeLight")}`, icon: "sun", run: () => setTheme("light") },
+      { id: "dark", group: "actions", label: `${t("shell.theme")}: ${t("shell.themeDark")}`, icon: "moon", run: () => setTheme("dark") },
+      { id: "system", group: "actions", label: `${t("shell.theme")}: ${t("shell.themeSystem")}`, icon: "monitor", run: () => setTheme("system") },
+      { id: "signout", group: "actions", label: t("shell.signOut"), icon: "logout", run: onSignOut },
+    ];
+    return [...pages, ...actions];
+  }, [t, lang, setLang, setTheme, router, onSignOut]);
+
+  const needle = query.trim().toLowerCase();
+  const results = needle
+    ? entries.filter((entry) => `${entry.label} ${entry.hint ?? ""} ${entry.id}`.toLowerCase().includes(needle))
+    : entries;
+  const safeCursor = Math.min(cursor, Math.max(0, results.length - 1));
+
+  function runEntry(entry: PaletteEntry | undefined) {
+    if (!entry) return;
+    onClose();
+    entry.run();
+  }
+
+  function onKeyDown(event: ReactKeyboardEvent) {
+    if (event.key === "Escape") onClose();
+    else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setCursor((safeCursor + 1) % Math.max(1, results.length));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setCursor((safeCursor - 1 + results.length) % Math.max(1, results.length));
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      runEntry(results[safeCursor]);
+    }
+  }
+
+  useEffect(() => {
+    listRef.current?.querySelector<HTMLElement>(`[data-index="${safeCursor}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [safeCursor]);
+
+  let lastGroup = "";
+  return (
+    <div className="fixed inset-0 z-[60] flex items-start justify-center px-4 pt-[12vh]" role="dialog" aria-modal="true" aria-label={t("shell.jumpTo")}>
+      <button type="button" aria-label={t("shell.close")} className="absolute inset-0 bg-overlay backdrop-blur-sm" onClick={onClose} />
+      <div className="relative w-full max-w-lg overflow-hidden rounded-xl border border-line bg-surface shadow-card" onKeyDown={onKeyDown}>
+        <div className="flex items-center gap-3 border-b border-line px-4">
+          <Icon name="search" className="h-4 w-4 text-slate-500" />
+          <input
+            autoFocus
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setCursor(0);
+            }}
+            placeholder={t("shell.jumpPlaceholder")}
+            className="h-12 flex-1 bg-transparent text-sm text-fg outline-none placeholder:text-slate-500"
+            role="combobox"
+            aria-expanded="true"
+            aria-controls="command-results"
+          />
+          <kbd className="rounded border border-line bg-surface-2 px-1.5 text-[11px] text-slate-500">Esc</kbd>
+        </div>
+        <ul id="command-results" ref={listRef} role="listbox" className="max-h-[50vh] overflow-y-auto p-2">
+          {results.length === 0 && <li className="px-3 py-6 text-center text-sm text-slate-500">{t("shell.noResults")}</li>}
+          {results.map((entry, index) => {
+            const header = entry.group !== lastGroup ? entry.group : null;
+            lastGroup = entry.group;
+            return (
+              <li key={entry.id} role="presentation">
+                {header && (
+                  <p className="px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                    {t(header === "pages" ? "shell.pages" : "shell.actions")}
+                  </p>
+                )}
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={index === safeCursor}
+                  data-index={index}
+                  onMouseMove={() => setCursor(index)}
+                  onClick={() => runEntry(entry)}
+                  className={`flex h-10 w-full items-center gap-3 rounded-lg px-3 text-left text-sm ${
+                    index === safeCursor ? "bg-brand/12 text-fg" : "text-slate-300"
+                  }`}
+                >
+                  <Icon name={entry.icon} className="h-4 w-4 text-slate-500" />
+                  <span className="flex-1 truncate">{entry.label}</span>
+                  {entry.hint && <span className="text-xs text-slate-500">{entry.hint}</span>}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
       </div>
     </div>
   );

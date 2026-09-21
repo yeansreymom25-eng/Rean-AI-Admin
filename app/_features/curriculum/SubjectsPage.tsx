@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import {
   clearAdminSession,
@@ -44,22 +44,7 @@ export function SubjectsPage() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
-  useEffect(() => {
-    if (!getAccessToken()) {
-      router.replace("/auth/Login");
-      return;
-    }
-
-    loadGrades();
-  }, [router]);
-
-  useEffect(() => {
-    if (selectedGradeId) {
-      loadSubjectsForGrade(selectedGradeId);
-    }
-  }, [selectedGradeId]);
-
-  async function loadGrades() {
+  const loadGrades = useCallback(async () => {
     setIsLoading(true);
     setError("");
     try {
@@ -79,9 +64,9 @@ export function SubjectsPage() {
     } finally {
       setIsLoading(false);
     }
-  }
+  }, [router]);
 
-  async function loadSubjectsForGrade(gradeLevelId: string) {
+  const loadSubjectsForGrade = useCallback(async (gradeLevelId: string) => {
     setIsLoading(true);
     setError("");
     try {
@@ -96,7 +81,22 @@ export function SubjectsPage() {
     } finally {
       setIsLoading(false);
     }
-  }
+  }, [router]);
+
+  useEffect(() => {
+    if (!getAccessToken()) {
+      router.replace("/auth/Login");
+      return;
+    }
+
+    queueMicrotask(() => { void loadGrades(); });
+  }, [loadGrades, router]);
+
+  useEffect(() => {
+    if (selectedGradeId) {
+      queueMicrotask(() => { void loadSubjectsForGrade(selectedGradeId); });
+    }
+  }, [loadSubjectsForGrade, selectedGradeId]);
 
   async function saveSubject(input: AdminSubjectInput) {
     if (!drawerState) return;
@@ -215,13 +215,13 @@ function GradeContextBar({
   return (
     <section className="mb-6 max-w-sm">
       <label className="block">
-        <span className="mb-2 block text-xs font-bold uppercase text-[#7da6e6]">
+        <span className="mb-2 block text-xs font-bold uppercase text-accent-fg">
           Grade Level
         </span>
         <select
           value={value}
           onChange={(event) => onChange(event.target.value)}
-          className="h-12 w-full rounded-lg border border-[#35507a] bg-[#101a2b] px-4 text-sm font-extrabold text-white outline-none transition focus:border-[#5368ff]"
+          className="h-12 w-full rounded-lg border border-line-strong bg-surface-2 px-4 text-sm font-extrabold text-fg outline-none transition focus:border-brand"
         >
           {options.length ? (
             options.map((option) => (
@@ -246,13 +246,13 @@ function SubjectSurface({
   count: number;
 }) {
   return (
-    <section className="overflow-hidden rounded-xl border border-[#243856] bg-[#0b1324] shadow-[0_18px_45px_rgba(0,0,0,0.2)]">
+    <section className="overflow-hidden rounded-xl border border-line bg-surface shadow-card">
       <div className="overflow-x-auto">{children}</div>
-      <div className="flex items-center justify-between border-t border-[#243856] px-6 py-4">
+      <div className="flex items-center justify-between border-t border-line px-6 py-4">
         <p className="text-xs font-semibold text-slate-600">
           Showing {count} {count === 1 ? "subject" : "subjects"}
         </p>
-        <span className="rounded-full border border-[#243856] bg-[#101a2b] px-3 py-1 text-[10px] font-extrabold uppercase text-slate-500">
+        <span className="rounded-full border border-line bg-surface-2 px-3 py-1 text-[10px] font-extrabold uppercase text-slate-500">
           Grade scoped
         </span>
       </div>
@@ -265,10 +265,10 @@ function EmptySubjectsRow({ isLoading }: { isLoading: boolean }) {
     <tr>
       <td colSpan={8} className="px-6 py-16">
         <div className="mx-auto flex max-w-md flex-col items-center text-center">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-[#35507a] bg-[#101a2b] text-lg font-black text-[#1fc7e9]">
+          <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-line-strong bg-surface-2 text-lg font-black text-info">
             {isLoading ? "..." : "+"}
           </div>
-          <p className="mt-4 text-sm font-extrabold text-white">
+          <p className="mt-4 text-sm font-extrabold text-fg">
             {isLoading ? "Loading subjects..." : "No subjects in this grade yet"}
           </p>
           <p className="mt-2 text-sm leading-6 text-slate-500">
@@ -296,7 +296,7 @@ function SubjectTable({
   return (
     <SubjectSurface count={subjects.length}>
       <table className="w-full min-w-[900px] text-left">
-        <thead className="bg-[#101a2b] text-xs uppercase text-slate-500">
+        <thead className="bg-surface-2 text-xs uppercase text-slate-500">
           <tr>
             <th className="px-6 py-4 font-extrabold">Icon</th>
             <th className="px-6 py-4 font-extrabold">Subject Name</th>
@@ -308,11 +308,11 @@ function SubjectTable({
             <th className="px-6 py-4 text-right font-extrabold">Actions</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-[#243856]">
+        <tbody className="divide-y divide-line">
           {subjects.map((subject) => (
-            <tr key={subject.subject_id} className="text-sm transition hover:bg-[#101a2b]/55">
+            <tr key={subject.subject_id} className="text-sm transition hover:bg-surface-2/55">
               <td className="px-6 py-6">
-                <span className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-lg border border-[#243856] bg-[#101a2b] text-xs font-extrabold text-[#1fc7e9]">
+                <span className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-lg border border-line bg-surface-2 text-xs font-extrabold text-info">
                   {subject.icon?.startsWith("data:image") || subject.icon?.startsWith("http") ? (
                     <img src={subject.icon} alt="" className="h-full w-full object-cover" />
                   ) : (
@@ -321,14 +321,14 @@ function SubjectTable({
                 </span>
               </td>
               <td className="px-6 py-6">
-                <p className="font-bold text-white">{subject.name}</p>
+                <p className="font-bold text-fg">{subject.name}</p>
                 <p className="mt-1 text-xs text-slate-500">{subject.khmer}</p>
               </td>
               <td className="px-6 py-6 font-semibold text-slate-300">
                 {subject.grade}
               </td>
               <td className="px-6 py-6">
-                <span className="rounded-lg border border-[#243856] bg-[#101a2b] px-3 py-1.5 text-xs font-bold text-slate-300">
+                <span className="rounded-lg border border-line bg-surface-2 px-3 py-1.5 text-xs font-bold text-slate-300">
                   {subject.code}
                 </span>
               </td>
@@ -465,10 +465,10 @@ function SubjectModal({
 function ReadOnlyField({ label, value }: { label: string; value: string }) {
   return (
     <label className="block">
-      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-[#8da7d8]">
+      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-accent-fg">
         {label}
       </span>
-      <div className="flex h-12 items-center rounded-lg border border-[#3b5d8f] bg-[#101a2b] px-4 text-sm font-semibold text-cyan-300">
+      <div className="flex h-12 items-center rounded-lg border border-line-strong bg-surface-2 px-4 text-sm font-semibold text-cyan-300">
         {value}
       </div>
     </label>
@@ -488,12 +488,12 @@ function NamedField({
 }) {
   return (
     <label className="block">
-      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-[#8da7d8]">
+      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-accent-fg">
         {label}
       </span>
       <input
         name={name}
-        className="h-12 w-full rounded-lg border border-[#3b5d8f] bg-[#101a2b] px-4 text-sm font-medium text-slate-100 outline-none transition placeholder:text-slate-400/70 focus:border-[#6f7cff] focus:ring-2 focus:ring-[#5368ff]/20"
+        className="h-12 w-full rounded-lg border border-line-strong bg-surface-2 px-4 text-sm font-medium text-slate-100 outline-none transition placeholder:text-slate-400/70 focus:border-brand focus:ring-2 focus:ring-brand/20"
         placeholder={placeholder}
         defaultValue={defaultValue}
       />
@@ -514,12 +514,12 @@ function NamedTextArea({
 }) {
   return (
     <label className="block">
-      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-[#8da7d8]">
+      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-accent-fg">
         {label}
       </span>
       <textarea
         name={name}
-        className="min-h-28 w-full resize-none rounded-lg border border-[#3b5d8f] bg-[#101a2b] px-4 py-3 text-sm font-medium leading-6 text-slate-100 outline-none transition placeholder:text-slate-400/70 focus:border-[#6f7cff] focus:ring-2 focus:ring-[#5368ff]/20"
+        className="min-h-28 w-full resize-none rounded-lg border border-line-strong bg-surface-2 px-4 py-3 text-sm font-medium leading-6 text-slate-100 outline-none transition placeholder:text-slate-400/70 focus:border-brand focus:ring-2 focus:ring-brand/20"
         placeholder={placeholder}
         defaultValue={defaultValue}
       />
@@ -529,7 +529,7 @@ function NamedTextArea({
 
 function NamedStatusToggle({ defaultChecked }: { defaultChecked: boolean }) {
   return (
-    <label className="flex items-center justify-between rounded-lg border border-[#3b5d8f] bg-[#101a2b] p-4">
+    <label className="flex items-center justify-between rounded-lg border border-line-strong bg-surface-2 p-4">
       <span>
         <span className="block text-sm font-semibold text-slate-50">Status</span>
         <span className="text-xs font-medium text-slate-400">
@@ -556,18 +556,18 @@ function FormDrawerActions({
   disabled?: boolean;
 }) {
   return (
-    <div className="mt-auto grid grid-cols-2 gap-3 border-t border-[#243856] p-6">
+    <div className="mt-auto grid grid-cols-2 gap-3 border-t border-line p-6">
       <button
         type="button"
         onClick={onClose}
-        className="h-12 rounded-lg border border-[#3b5d8f] bg-[#101a2b] text-sm font-bold text-slate-100 transition hover:border-[#6f7cff] hover:bg-[#0b1324]"
+        className="h-12 rounded-lg border border-line-strong bg-surface-2 text-sm font-bold text-slate-100 transition hover:border-brand hover:bg-surface"
       >
         Cancel
       </button>
       <button
         type="submit"
         disabled={disabled}
-        className="h-12 rounded-lg bg-gradient-to-r from-[#4367ff] to-[#7a4dff] text-sm font-bold text-white shadow-lg shadow-blue-950/30 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+        className="h-12 rounded-lg bg-gradient-to-r from-brand to-brand-2 text-sm font-bold text-white shadow-lg shadow-blue-950/30 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
       >
         {primaryLabel}
       </button>

@@ -106,10 +106,10 @@ export default function StudentsPage() {
         </p>
       )}
 
-      <section className="mt-6 rounded-xl border border-[#243856] bg-[#0b1324] p-5 shadow-[0_18px_45px_rgba(0,0,0,0.16)]">
+      <section className="mt-6 rounded-xl border border-line bg-surface p-5 shadow-card">
         <div className="grid gap-4 md:grid-cols-[1fr_220px_220px]">
           <label className="block">
-            <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-[#8da7d8]">
+            <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-accent-fg">
               Search Students
             </span>
             <div className="relative">
@@ -120,7 +120,7 @@ export default function StudentsPage() {
                 placeholder="Search by name or student ID..."
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                className="h-12 w-full rounded-lg border border-[#3b5d8f] bg-[#101a2b] pl-11 pr-4 text-sm font-medium text-slate-100 outline-none transition placeholder:text-slate-400/70 focus:border-[#6f7cff] focus:ring-2 focus:ring-[#5368ff]/20"
+                className="h-12 w-full rounded-lg border border-line-strong bg-surface-2 pl-11 pr-4 text-sm font-medium text-slate-100 outline-none transition placeholder:text-slate-400/70 focus:border-brand focus:ring-2 focus:ring-brand/20"
               />
             </div>
           </label>
@@ -139,7 +139,13 @@ export default function StudentsPage() {
         </div>
       </section>
 
-      <StudentTable students={filteredStudents} />
+      <StudentTable
+        students={filteredStudents}
+        onView={(student) => router.push(`/ai_reviews?student=${encodeURIComponent(student.id)}`)}
+        onRestrict={(student) =>
+          router.push(`/ai_reviews?student=${encodeURIComponent(student.id)}&action=restrict`)
+        }
+      />
     </AdminShell>
   );
 }
@@ -156,14 +162,14 @@ function MetricCard({
   tone?: "blue" | "cyan" | "violet" | "amber";
 }) {
   const toneClass = {
-    blue: "text-[#5368ff]",
-    cyan: "text-[#1fc7e9]",
-    violet: "text-[#7a4dff]",
+    blue: "text-brand",
+    cyan: "text-info",
+    violet: "text-brand-2",
     amber: "text-amber-300",
   }[tone];
 
   return (
-    <article className="min-h-[132px] rounded-xl border border-[#243856] bg-[#0b1324] p-6 shadow-[0_18px_45px_rgba(0,0,0,0.18)] transition hover:border-[#35507a]">
+    <article className="min-h-[132px] rounded-xl border border-line bg-surface p-6 shadow-card transition hover:border-line-strong">
       <p className="text-sm font-semibold text-slate-500">{label}</p>
       <p className={`mt-3 text-3xl font-extrabold ${toneClass}`}>{value}</p>
       <p className="mt-3 text-xs font-bold text-emerald-300">{accent}</p>
@@ -184,13 +190,13 @@ function SelectField({
 }) {
   return (
     <label className="block">
-      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-[#8da7d8]">
+      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-accent-fg">
         {label}
       </span>
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="h-12 w-full rounded-lg border border-[#3b5d8f] bg-[#101a2b] px-4 text-sm font-medium text-slate-100 outline-none transition focus:border-[#6f7cff] focus:ring-2 focus:ring-[#5368ff]/20"
+        className="h-12 w-full rounded-lg border border-line-strong bg-surface-2 px-4 text-sm font-medium text-slate-100 outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/20"
       >
         {options.map((option) => (
           <option key={option}>{option}</option>
@@ -200,18 +206,26 @@ function SelectField({
   );
 }
 
-function StudentTable({ students }: { students: Student[] }) {
+function StudentTable({
+  students,
+  onView,
+  onRestrict,
+}: {
+  students: Student[];
+  onView: (student: Student) => void;
+  onRestrict: (student: Student) => void;
+}) {
   return (
-    <section className="mt-6 overflow-hidden rounded-xl border border-[#243856] bg-[#0b1324] shadow-[0_18px_45px_rgba(0,0,0,0.2)]">
-      <div className="border-b border-[#243856] px-6 py-5">
-        <h2 className="text-lg font-extrabold text-white">Student Directory</h2>
+    <section className="mt-6 overflow-hidden rounded-xl border border-line bg-surface shadow-card">
+      <div className="border-b border-line px-6 py-5">
+        <h2 className="text-lg font-extrabold text-fg">Student Directory</h2>
         <p className="mt-1 text-sm font-semibold text-slate-500">
           Review progress, sessions, and intervention status.
         </p>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[900px] text-left">
-          <thead className="bg-[#101a2b] text-xs uppercase text-slate-500">
+          <thead className="bg-surface-2 text-xs uppercase text-slate-500">
             <tr>
               <th className="px-6 py-4 font-extrabold">Student</th>
               <th className="px-6 py-4 font-extrabold">Grade</th>
@@ -222,12 +236,12 @@ function StudentTable({ students }: { students: Student[] }) {
               <th className="px-6 py-4 text-right font-extrabold">Actions</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-[#243856]">
+          <tbody className="divide-y divide-line">
             {students.length ? (
               students.map((student) => (
-              <tr key={student.id} className="text-sm transition hover:bg-[#101a2b]/55">
+              <tr key={student.id} className="text-sm transition hover:bg-surface-2/55">
                 <td className="px-6 py-5">
-                  <p className="font-bold text-white">{student.name}</p>
+                  <p className="font-bold text-fg">{student.name}</p>
                   <p className="mt-1 text-xs font-semibold text-slate-500">
                     {student.id} · {student.lastSeen}
                   </p>
@@ -236,9 +250,9 @@ function StudentTable({ students }: { students: Student[] }) {
                 <td className="px-6 py-5 font-semibold text-slate-300">{student.focus}</td>
                 <td className="px-6 py-5">
                   <div className="flex items-center gap-3">
-                    <div className="h-2 w-28 overflow-hidden rounded-full bg-[#101a2b]">
+                    <div className="h-2 w-28 overflow-hidden rounded-full bg-surface-2">
                       <div
-                        className="h-full rounded-full bg-gradient-to-r from-[#4367ff] to-[#1fc7e9]"
+                        className="h-full rounded-full bg-gradient-to-r from-brand to-info"
                         style={{ width: `${student.progress}%` }}
                       />
                     </div>
@@ -247,16 +261,16 @@ function StudentTable({ students }: { students: Student[] }) {
                     </span>
                   </div>
                 </td>
-                <td className="px-6 py-5 font-bold text-[#1fc7e9]">{student.sessions}</td>
+                <td className="px-6 py-5 font-bold text-info">{student.sessions}</td>
                 <td className="px-6 py-5">
                   <StatusPill status={student.status} />
                 </td>
                 <td className="px-6 py-5 text-right">
                   <div className="flex justify-end gap-2">
-                    <button className="h-9 rounded-lg border border-[#243856] bg-[#101a2b] px-4 text-sm font-bold text-slate-300 transition hover:border-[#5368ff] hover:text-white">
+                    <button onClick={() => onView(student)} className="h-9 rounded-lg border border-line bg-surface-2 px-4 text-sm font-bold text-slate-300 transition hover:border-brand hover:text-fg">
                       View
                     </button>
-                    <button className="h-9 rounded-lg border border-[#243856] bg-[#101a2b] px-4 text-sm font-bold text-slate-300 transition hover:border-rose-400 hover:text-rose-300">
+                    <button onClick={() => onRestrict(student)} className="h-9 rounded-lg border border-line bg-surface-2 px-4 text-sm font-bold text-slate-300 transition hover:border-rose-400 hover:text-rose-300">
                       Restrict
                     </button>
                   </div>
@@ -276,7 +290,7 @@ function StudentTable({ students }: { students: Student[] }) {
           </tbody>
         </table>
       </div>
-      <div className="border-t border-[#243856] px-6 py-4">
+      <div className="border-t border-line px-6 py-4">
         <p className="text-xs font-semibold text-slate-600">
           Showing {students.length} students
         </p>

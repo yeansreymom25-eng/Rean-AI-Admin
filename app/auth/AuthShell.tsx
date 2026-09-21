@@ -11,8 +11,8 @@ type AuthShellProps = {
 
 export function AuthShell({ title, subtitle, children, footer }: AuthShellProps) {
   return (
-    <main className="flex min-h-screen items-center justify-center bg-[#070b19] px-5 py-8 text-slate-100">
-      <section className="w-full max-w-[430px] rounded-xl border border-[#243856] bg-[#0b1324] p-6 shadow-[0_18px_45px_rgba(0,0,0,0.22)] sm:p-8">
+    <main className="flex min-h-screen items-center justify-center bg-canvas px-5 py-8 text-slate-100">
+      <section className="w-full max-w-[430px] rounded-xl border border-line bg-surface p-6 shadow-card sm:p-8">
         <div className="mb-7 text-center">
           <Image
             src="/AI Tutor_Logo.png"
@@ -25,7 +25,7 @@ export function AuthShell({ title, subtitle, children, footer }: AuthShellProps)
         </div>
 
         <div className="mb-7">
-          <h2 className="text-2xl font-extrabold tracking-tight text-white">
+          <h2 className="text-2xl font-extrabold tracking-tight text-fg">
             {title}
           </h2>
           <p className="mt-2 text-sm leading-6 text-slate-500">{subtitle}</p>
@@ -34,7 +34,7 @@ export function AuthShell({ title, subtitle, children, footer }: AuthShellProps)
         {children}
 
         {footer && (
-          <div className="mt-7 border-t border-[#243856] pt-6 text-center text-sm text-slate-500">
+          <div className="mt-7 border-t border-line pt-6 text-center text-sm text-slate-500">
             {footer}
           </div>
         )}
@@ -74,7 +74,7 @@ export function Field({
         onChange={onChange}
         required={required}
         autoComplete={autoComplete}
-        className="h-12 w-full rounded-lg border border-[#7da6e6] bg-[#e8f1ff] px-4 text-sm font-semibold text-[#071226] outline-none transition placeholder:text-[#3e5f91] focus:border-[#5368ff] focus:ring-2 focus:ring-[#5368ff]/20"
+        className="h-12 w-full rounded-lg border border-line-strong bg-surface-2 px-4 text-sm font-medium text-fg outline-none transition placeholder:text-slate-500 focus:border-brand focus:ring-2 focus:ring-brand/20"
         placeholder={placeholder}
       />
     </label>
@@ -93,7 +93,7 @@ export function PrimaryButton({
   disabled?: boolean;
 }) {
   const classes =
-    "flex h-12 w-full items-center justify-center rounded-lg bg-gradient-to-r from-[#4367ff] to-[#7a4dff] text-sm font-bold text-white shadow-lg shadow-blue-950/30 transition hover:brightness-110";
+    "flex h-12 w-full items-center justify-center rounded-lg bg-gradient-to-r from-brand to-brand-2 text-sm font-bold text-white shadow-lg shadow-blue-950/30 transition hover:brightness-110";
 
   if (href) {
     return (
@@ -122,7 +122,7 @@ export function GoogleButton({
   disabled?: boolean;
 }) {
   const classes =
-    "flex h-12 w-full items-center justify-center gap-3 rounded-lg border border-[#35507a] bg-black text-sm font-bold text-slate-200 transition hover:border-[#5368ff] hover:text-white";
+    "flex h-12 w-full items-center justify-center gap-3 rounded-lg border border-line-strong bg-surface text-sm font-semibold text-fg transition hover:border-brand hover:bg-surface-2";
 
   if (href) {
     return (

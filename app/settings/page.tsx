@@ -202,7 +202,7 @@ export default function SettingsPage() {
           type="button"
           onClick={saveSettings}
           disabled={saving}
-          className="h-11 rounded-lg bg-gradient-to-r from-[#4367ff] to-[#7a4dff] px-5 text-sm font-bold text-white shadow-lg shadow-blue-950/30 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+          className="h-11 rounded-lg bg-gradient-to-r from-brand to-brand-2 px-5 text-sm font-bold text-white shadow-lg shadow-blue-950/30 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {saving ? "Saving..." : "Save Changes"}
         </button>
@@ -214,16 +214,16 @@ export default function SettingsPage() {
         </p>
       )}
       <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
-        <section className="rounded-xl border border-[#243856] bg-[#0b1324] p-6 shadow-[0_18px_45px_rgba(0,0,0,0.16)]">
+        <section className="rounded-xl border border-line bg-surface p-6 shadow-card">
           <div className="mb-6">
-            <h2 className="text-lg font-extrabold text-white">Admin Profile</h2>
+            <h2 className="text-lg font-extrabold text-fg">Admin Profile</h2>
             <p className="mt-1 text-sm font-semibold text-slate-500">
               Details shown across the admin workspace.
             </p>
           </div>
 
-          <div className="mb-6 flex flex-col gap-4 rounded-lg border border-[#243856] bg-[#101a2b] p-4 sm:flex-row sm:items-center">
-            <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-full border-2 border-[#5368ff] bg-gradient-to-br from-[#4367ff] to-[#7a4dff] text-xl font-extrabold text-white">
+          <div className="mb-6 flex flex-col gap-4 rounded-lg border border-line bg-surface-2 p-4 sm:flex-row sm:items-center">
+            <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-full border-2 border-brand bg-gradient-to-br from-brand to-brand-2 text-xl font-extrabold text-white">
               {settings.profile.profile_image_url ? (
                 <img
                   src={settings.profile.profile_image_url}
@@ -241,7 +241,7 @@ export default function SettingsPage() {
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <label className="inline-flex h-10 cursor-pointer items-center justify-center rounded-lg border border-[#3b5d8f] bg-[#0b1324] px-4 text-sm font-bold text-slate-100 transition hover:border-[#6f7cff] hover:text-white">
+              <label className="inline-flex h-10 cursor-pointer items-center justify-center rounded-lg border border-line-strong bg-surface px-4 text-sm font-bold text-slate-100 transition hover:border-brand hover:text-fg">
                 Upload Photo
                 <input
                   type="file"
@@ -254,7 +254,7 @@ export default function SettingsPage() {
                 <button
                   type="button"
                   onClick={() => updateProfileField("profile_image_url", null)}
-                  className="h-10 rounded-lg border border-[#3b5d8f] bg-[#0b1324] px-4 text-sm font-bold text-rose-300 transition hover:border-rose-400 hover:text-rose-200"
+                  className="h-10 rounded-lg border border-line-strong bg-surface px-4 text-sm font-bold text-rose-300 transition hover:border-rose-400 hover:text-rose-200"
                 >
                   Remove
                 </button>
@@ -287,9 +287,9 @@ export default function SettingsPage() {
           {message && <p className="mt-4 text-sm font-bold text-emerald-300">{message}</p>}
         </section>
 
-        <section className="rounded-xl border border-[#243856] bg-[#0b1324] p-6 shadow-[0_18px_45px_rgba(0,0,0,0.16)]">
+        <section className="rounded-xl border border-line bg-surface p-6 shadow-card">
           <div className="mb-6">
-            <h2 className="text-lg font-extrabold text-white">Workspace</h2>
+            <h2 className="text-lg font-extrabold text-fg">Workspace</h2>
             <p className="mt-1 text-sm font-semibold text-slate-500">
               Regional and display preferences.
             </p>
@@ -331,10 +331,10 @@ export default function SettingsPage() {
         />
       </div>
 
-      <section className="mt-6 rounded-xl border border-[#243856] bg-[#0b1324] p-6 shadow-[0_18px_45px_rgba(0,0,0,0.16)]">
+      <section className="mt-6 rounded-xl border border-line bg-surface p-6 shadow-card">
         <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h2 className="text-lg font-extrabold text-white">Security</h2>
+            <h2 className="text-lg font-extrabold text-fg">Security</h2>
             <p className="mt-1 text-sm font-semibold text-slate-500">
               Review admin access and audit preferences.
             </p>
@@ -365,13 +365,13 @@ function Field({
 }) {
   return (
     <label className="block">
-      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-[#8da7d8]">
+      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-accent-fg">
         {label}
       </span>
       <input
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="h-12 w-full rounded-lg border border-[#3b5d8f] bg-[#101a2b] px-4 text-sm font-medium text-slate-100 outline-none transition placeholder:text-slate-400/70 focus:border-[#6f7cff] focus:ring-2 focus:ring-[#5368ff]/20"
+        className="h-12 w-full rounded-lg border border-line-strong bg-surface-2 px-4 text-sm font-medium text-slate-100 outline-none transition placeholder:text-slate-400/70 focus:border-brand focus:ring-2 focus:ring-brand/20"
       />
     </label>
   );
@@ -390,13 +390,13 @@ function SelectField({
 }) {
   return (
     <label className="block">
-      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-[#8da7d8]">
+      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-accent-fg">
         {label}
       </span>
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="h-12 w-full rounded-lg border border-[#3b5d8f] bg-[#101a2b] px-4 text-sm font-medium text-slate-100 outline-none transition focus:border-[#6f7cff] focus:ring-2 focus:ring-[#5368ff]/20"
+        className="h-12 w-full rounded-lg border border-line-strong bg-surface-2 px-4 text-sm font-medium text-slate-100 outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/20"
       >
         {options.map((option) => (
           <option key={option}>{option}</option>
@@ -422,9 +422,9 @@ function SettingsCard({
   onToggle: (group: "ai_review" | "student_access", key: string) => void;
 }) {
   return (
-    <section className="rounded-xl border border-[#243856] bg-[#0b1324] p-6 shadow-[0_18px_45px_rgba(0,0,0,0.16)]">
+    <section className="rounded-xl border border-line bg-surface p-6 shadow-card">
       <div className="mb-5">
-        <h2 className="text-lg font-extrabold text-white">{title}</h2>
+        <h2 className="text-lg font-extrabold text-fg">{title}</h2>
         <p className="mt-1 text-sm font-semibold text-slate-500">{description}</p>
       </div>
 
@@ -455,12 +455,12 @@ function ToggleRow({
     <button
       type="button"
       onClick={onToggle}
-      className="flex w-full items-center justify-between gap-4 rounded-lg border border-[#243856] bg-[#101a2b] px-4 py-3 text-left transition hover:border-[#35507a]"
+      className="flex w-full items-center justify-between gap-4 rounded-lg border border-line bg-surface-2 px-4 py-3 text-left transition hover:border-line-strong"
     >
       <span className="text-sm font-semibold text-slate-200">{label}</span>
       <span
         className={`relative h-6 w-11 shrink-0 rounded-full transition ${
-          enabled ? "bg-[#5368ff]" : "bg-[#263a59]"
+          enabled ? "bg-brand" : "bg-surface-3"
         }`}
       >
         <span
@@ -475,8 +475,8 @@ function ToggleRow({
 
 function SecurityTile({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-[#243856] bg-[#101a2b] p-4">
-      <p className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-[#8da7d8]">
+    <div className="rounded-lg border border-line bg-surface-2 p-4">
+      <p className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-accent-fg">
         {label}
       </p>
       <p className="mt-3 text-sm font-bold text-slate-100">{value}</p>

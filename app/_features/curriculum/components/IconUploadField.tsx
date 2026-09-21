@@ -1,14 +1,14 @@
 export function IconUploadField() {
   return (
     <label className="block">
-      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-[#8da7d8]">
+      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-accent-fg">
         Subject Icon
       </span>
       <button
         type="button"
-        className="group flex h-28 w-full flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-[#3b5d8f] bg-[#101a2b] text-center text-sm font-medium text-slate-300 transition hover:border-[#7d8dff] hover:bg-[#121f35] hover:text-slate-100 focus:outline-none focus:ring-2 focus:ring-[#5368ff]/25"
+        className="group flex h-28 w-full flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-line-strong bg-surface-2 text-center text-sm font-medium text-slate-300 transition hover:border-brand hover:bg-surface-3 hover:text-slate-100 focus:outline-none focus:ring-2 focus:ring-brand/25"
       >
-        <span className="flex h-12 w-12 items-center justify-center rounded-xl border border-[#6f7cff]/40 bg-[#5368ff]/15 text-[#aeb8ff] shadow-[0_10px_30px_rgba(83,104,255,0.2)] transition group-hover:border-[#8f99ff] group-hover:text-white">
+        <span className="flex h-12 w-12 items-center justify-center rounded-xl border border-brand/40 bg-brand/15 text-accent-fg transition group-hover:border-brand group-hover:text-brand">
           <UploadIcon />
         </span>
         <span>Click to upload or drag and drop SVG / PNG</span>

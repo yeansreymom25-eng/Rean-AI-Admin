@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import {
   clearAdminSession,
@@ -38,16 +38,7 @@ export function GradesPage() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
-  useEffect(() => {
-    if (!getAccessToken()) {
-      router.replace("/auth/Login");
-      return;
-    }
-
-    loadGrades();
-  }, [router]);
-
-  async function loadGrades() {
+  const loadGrades = useCallback(async () => {
     setIsLoading(true);
     setError("");
     try {
@@ -62,7 +53,16 @@ export function GradesPage() {
     } finally {
       setIsLoading(false);
     }
-  }
+  }, [router]);
+
+  useEffect(() => {
+    if (!getAccessToken()) {
+      router.replace("/auth/Login");
+      return;
+    }
+
+    queueMicrotask(() => { void loadGrades(); });
+  }, [loadGrades, router]);
 
   async function saveGrade(payload: {
     name: string;
@@ -196,7 +196,7 @@ function GradeTable({
   return (
     <DataSurface footer={footer}>
       <table className="w-full min-w-[840px] text-left">
-        <thead className="bg-[#101a2b] text-xs uppercase text-slate-500">
+        <thead className="bg-surface-2 text-xs uppercase text-slate-500">
           <tr>
             <th className="px-6 py-4 font-extrabold">Grade Name</th>
             <th className="px-6 py-4 font-extrabold">Grade Number</th>
@@ -205,7 +205,7 @@ function GradeTable({
             <th className="px-6 py-4 text-right font-extrabold">Actions</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-[#243856]">
+        <tbody className="divide-y divide-line">
           {isLoading ? (
             <tr>
               <td colSpan={5} className="px-6 py-10 text-center text-sm font-semibold text-slate-500">
@@ -214,13 +214,13 @@ function GradeTable({
             </tr>
           ) : grades.length ? (
             grades.map((grade) => (
-              <tr key={grade.grade_level_id} className="text-sm transition hover:bg-[#101a2b]/55">
+              <tr key={grade.grade_level_id} className="text-sm transition hover:bg-surface-2/55">
                 <td className="px-6 py-6">
-                  <p className="font-bold text-white">{grade.name}</p>
+                  <p className="font-bold text-fg">{grade.name}</p>
                   <p className="mt-1 text-xs text-slate-500">{grade.khmer}</p>
                 </td>
                 <td className="px-6 py-6">
-                  <span className="rounded-lg border border-[#243856] bg-[#101a2b] px-3 py-1.5 text-xs font-bold text-slate-300">
+                  <span className="rounded-lg border border-line bg-surface-2 px-3 py-1.5 text-xs font-bold text-slate-300">
                     {grade.number}
                   </span>
                 </td>
@@ -350,7 +350,7 @@ function GradeModal({
             value={description}
             onChange={setDescription}
           />
-          <label className="flex items-center justify-between rounded-lg border border-[#3b5d8f] bg-[#101a2b] p-4">
+          <label className="flex items-center justify-between rounded-lg border border-line-strong bg-surface-2 p-4">
             <span>
               <span className="block text-sm font-semibold text-slate-50">Status</span>
               <span className="text-xs font-medium text-slate-400">
@@ -365,18 +365,18 @@ function GradeModal({
             />
           </label>
         </div>
-        <div className="mt-auto grid grid-cols-2 gap-3 border-t border-[#243856] p-6">
+        <div className="mt-auto grid grid-cols-2 gap-3 border-t border-line p-6">
           <button
             type="button"
             onClick={onClose}
-            className="h-12 rounded-lg border border-[#3b5d8f] bg-[#101a2b] text-sm font-bold text-slate-100 transition hover:border-[#6f7cff] hover:bg-[#0b1324]"
+            className="h-12 rounded-lg border border-line-strong bg-surface-2 text-sm font-bold text-slate-100 transition hover:border-brand hover:bg-surface"
           >
             Cancel
           </button>
           <button
             type="submit"
             disabled={isSaving}
-            className="h-12 rounded-lg bg-gradient-to-r from-[#4367ff] to-[#7a4dff] text-sm font-bold text-white shadow-lg shadow-blue-950/30 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+            className="h-12 rounded-lg bg-gradient-to-r from-brand to-brand-2 text-sm font-bold text-white shadow-lg shadow-blue-950/30 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isSaving ? "Saving..." : primaryLabel}
           </button>
@@ -399,11 +399,11 @@ function FormField({
 }) {
   return (
     <label className="block">
-      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-[#8da7d8]">
+      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-accent-fg">
         {label}
       </span>
       <input
-        className="h-12 w-full rounded-lg border border-[#3b5d8f] bg-[#101a2b] px-4 text-sm font-medium text-slate-100 outline-none transition placeholder:text-slate-400/70 focus:border-[#6f7cff] focus:ring-2 focus:ring-[#5368ff]/20"
+        className="h-12 w-full rounded-lg border border-line-strong bg-surface-2 px-4 text-sm font-medium text-slate-100 outline-none transition placeholder:text-slate-400/70 focus:border-brand focus:ring-2 focus:ring-brand/20"
         placeholder={placeholder}
         value={value}
         onChange={(event) => onChange(event.target.value)}
@@ -425,11 +425,11 @@ function FormTextArea({
 }) {
   return (
     <label className="block">
-      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-[#8da7d8]">
+      <span className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.12em] text-accent-fg">
         {label}
       </span>
       <textarea
-        className="min-h-28 w-full resize-none rounded-lg border border-[#3b5d8f] bg-[#101a2b] px-4 py-3 text-sm font-medium leading-6 text-slate-100 outline-none transition placeholder:text-slate-400/70 focus:border-[#6f7cff] focus:ring-2 focus:ring-[#5368ff]/20"
+        className="min-h-28 w-full resize-none rounded-lg border border-line-strong bg-surface-2 px-4 py-3 text-sm font-medium leading-6 text-slate-100 outline-none transition placeholder:text-slate-400/70 focus:border-brand focus:ring-2 focus:ring-brand/20"
         placeholder={placeholder}
         value={value}
         onChange={(event) => onChange(event.target.value)}

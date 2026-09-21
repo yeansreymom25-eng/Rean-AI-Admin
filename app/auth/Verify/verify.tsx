@@ -16,7 +16,7 @@ export default function VerifyPage() {
   useEffect(() => {
     const storedToken = window.sessionStorage.getItem("rean_admin_reset_token");
     if (storedToken) {
-      setToken(storedToken);
+      queueMicrotask(() => setToken(storedToken));
     }
   }, []);
 
@@ -43,7 +43,7 @@ export default function VerifyPage() {
       footer={
         <>
           Did not receive a code?{" "}
-          <button className="font-bold text-[#5368ff]">Send again</button>
+          <button className="font-bold text-brand">Send again</button>
         </>
       }
     >

@@ -15,6 +15,7 @@ import {
   deleteAdminCurriculumContent,
   getAccessToken,
   loadAdminCurriculumContent,
+  loadAdminCurriculumVersions,
   loadAdminGrades,
   loadAdminSubjects,
   loadAdminTopics,
@@ -22,11 +23,19 @@ import {
   type AdminCurriculumContent,
   type AdminCurriculumContentInput,
   type AdminCurriculumTopic,
+  type AdminCurriculumVersion,
   type AdminGradeLevel,
   type AdminSubject,
 } from "../auth/adminAuth";
+import katex from "katex";
 import { CurriculumShell } from "./CurriculumShell";
 import { Drawer } from "./Shared";
+import { FormulaEditor, type FormulaVariable } from "./components/FormulaEditor";
+import { WorkedStepsEditor, type WorkedStep } from "./components/WorkedStepsEditor";
+import { MisconceptionsEditor, type MisconceptionItem } from "./components/MisconceptionsEditor";
+import { KhmerTermsEditor, type KhmerTermItem } from "./components/KhmerTermsEditor";
+import { KatexPreview } from "./components/KatexPreview";
+import { BulkImportModal } from "./components/BulkImportModal";
 
 /* =========================================================
    TYPES
@@ -35,29 +44,15 @@ import { Drawer } from "./Shared";
 type FormulaStatus = "Published" | "Draft";
 type ContentStatus = "Published" | "Draft";
 
-type FormulaVariable = {
-  id: string;
-  symbol: string;
-  meaning: string;
-  unit: string;
-};
-
-type FormulaStep = {
-  id: string;
-  text: string;
-};
-
-type KhmerTerm = {
-  id: string;
-  english: string;
-  khmer: string;
-};
+type FormulaStep = WorkedStep;
+type KhmerTerm = KhmerTermItem;
 
 type Formula = {
   id: string;
   grade: string;
   subject: string;
   lesson: string;
+  subtopic?: string;
   expression: string;
   description: string;
   status: FormulaStatus;
@@ -65,6 +60,7 @@ type Formula = {
   variables: FormulaVariable[];
   steps: FormulaStep[];
   khmerTerms: KhmerTerm[];
+  misconceptions?: MisconceptionItem[];
 
   prerequisites: string[];
   tags: string[];
@@ -173,25 +169,22 @@ export function ContentPage() {
   const [grades, setGrades] = useState<AdminGradeLevel[]>([]);
   const [subjects, setSubjects] = useState<AdminSubject[]>([]);
   const [topics, setTopics] = useState<AdminCurriculumTopic[]>([]);
+  const [versions, setVersions] = useState<AdminCurriculumVersion[]>([]);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
-  useEffect(() => {
-    if (!getAccessToken()) {
-      router.replace("/auth/Login");
-      return;
-    }
-
-    let isMounted = true;
-    Promise.all([
+  function refreshCurriculum() {
+    return Promise.all([
       loadAdminGrades(),
       loadAdminSubjects(),
       loadAdminTopics(),
       loadAdminCurriculumContent(),
+      loadAdminCurriculumVersions(),
     ])
-      .then(([loadedGrades, loadedSubjects, loadedTopics, loadedContent]) => {
-        if (!isMounted) return;
+      .then(([loadedGrades, loadedSubjects, loadedTopics, loadedContent, loadedVersions]) => {
         setGrades(loadedGrades);
         setSubjects(loadedSubjects.filter((subject) => subject.status !== "Inactive"));
         setTopics(loadedTopics.filter((topic) => topic.status !== "Inactive"));
+        setVersions(loadedVersions);
         setFormulas(
           loadedContent
             .filter((content) => content.kind === "Formula")
@@ -224,10 +217,15 @@ export function ContentPage() {
           router.replace("/auth/Login");
         }
       });
+  }
 
-    return () => {
-      isMounted = false;
-    };
+  useEffect(() => {
+    if (!getAccessToken()) {
+      router.replace("/auth/Login");
+      return;
+    }
+
+    void refreshCurriculum();
   }, [router]);
 
   const curriculumOptions = useMemo(() => {
@@ -257,14 +255,14 @@ export function ContentPage() {
     });
   }, [grades, subjects, topics]);
 
-  const selectedGradeOption =
+  const selectedGradeOption = useMemo(() =>
     curriculumOptions.find(
       (option) =>
         option.grade === selectedGrade,
     ) ?? curriculumOptions[0] ?? {
       grade: "No grades yet",
       subjects: [{ name: "No subjects yet", lessons: ["No topics yet"] }],
-    };
+    }, [curriculumOptions, selectedGrade]);
 
   const availableSubjects =
     selectedGradeOption.subjects.map(
@@ -290,8 +288,10 @@ export function ContentPage() {
           subject.name === selectedSubject,
       )
     ) {
-      setSelectedSubject(firstSubject.name);
-      setSelectedLesson(firstSubject.lessons[0]);
+      queueMicrotask(() => {
+        setSelectedSubject(firstSubject.name);
+        setSelectedLesson(firstSubject.lessons[0]);
+      });
       return;
     }
 
@@ -301,9 +301,7 @@ export function ContentPage() {
           lesson === selectedLesson,
       )
     ) {
-      setSelectedLesson(
-        selectedSubjectOption.lessons[0],
-      );
+      queueMicrotask(() => setSelectedLesson(selectedSubjectOption.lessons[0]));
     }
   }, [
     selectedGrade,
@@ -526,8 +524,13 @@ export function ContentPage() {
         topic.subject_id === selectedSubjectData?.subject_id &&
         topic.name === selectedLesson,
     );
+    const selectedVersion = versions.find((version) =>
+      version.grade_level_id === selectedGradeData?.grade_level_id &&
+      version.subject_id === selectedSubjectData?.subject_id &&
+      version.status === "draft",
+    );
 
-    if (!selectedGradeData || !selectedSubjectData || !selectedTopicData) {
+    if (!selectedGradeData || !selectedSubjectData || !selectedTopicData || !selectedVersion) {
       return null;
     }
 
@@ -536,12 +539,14 @@ export function ContentPage() {
 
     return {
       kind,
+      curriculum_version_id: selectedVersion.curriculum_version_id,
       grade_level_id: selectedGradeData.grade_level_id,
       subject_id: selectedSubjectData.subject_id,
       topic_id: selectedTopicData.topic_id,
       grade: selectedGrade,
       subject: selectedSubject,
       lesson: selectedLesson,
+      subtopic: formulaItem?.subtopic || selectedLesson,
       title: lessonItem?.title ?? "",
       summary: lessonItem?.summary ?? "",
       body: lessonItem?.body ?? "",
@@ -550,6 +555,7 @@ export function ContentPage() {
       variables: formulaItem?.variables ?? [],
       steps: formulaItem?.steps ?? [],
       khmerTerms: formulaItem?.khmerTerms ?? [],
+      common_misconceptions: formulaItem?.misconceptions ?? [],
       prerequisites: formulaItem?.prerequisites ?? [],
       tags: item.tags,
       status: item.status,
@@ -581,6 +587,8 @@ export function ContentPage() {
           kind: activeTab,
         });
       }}
+      secondaryActionLabel="Bulk Import"
+      onSecondaryAction={() => setIsImportModalOpen(true)}
     >
       {/* ===================================================
           TOP META
@@ -613,7 +621,7 @@ export function ContentPage() {
           TABS
       =================================================== */}
 
-      <div className="mb-6 border-b border-[#243856]">
+      <div className="mb-6 border-b border-line">
         <div className="flex min-w-max gap-1 overflow-x-auto">
           {tabs.map((tab) => (
             <button
@@ -621,14 +629,14 @@ export function ContentPage() {
               type="button"
               onClick={() => setActiveTab(tab)}
               className={`relative px-5 py-3 text-sm font-bold transition ${activeTab === tab
-                  ? "text-white"
+                  ? "text-fg"
                   : "text-slate-500 hover:text-slate-300"
                 }`}
             >
               {tab}
 
               {activeTab === tab && (
-                <span className="absolute inset-x-0 bottom-0 h-0.5 bg-[#5368ff]" />
+                <span className="absolute inset-x-0 bottom-0 h-0.5 bg-brand" />
               )}
             </button>
           ))}
@@ -653,7 +661,7 @@ export function ContentPage() {
                 setSearchQuery(event.target.value)
               }
               placeholder="Search formulas..."
-              className="h-11 w-full rounded-lg border border-[#35507a] bg-[#101a2b] pl-11 pr-4 text-sm font-semibold text-white outline-none transition placeholder:text-slate-500 focus:border-[#5368ff]"
+              className="h-11 w-full rounded-lg border border-line-strong bg-surface-2 pl-11 pr-4 text-sm font-semibold text-fg outline-none transition placeholder:text-slate-500 focus:border-brand"
             />
           </div>
 
@@ -677,7 +685,7 @@ export function ContentPage() {
             ))}
 
             {visibleFormulas.length === 0 && (
-              <div className="rounded-xl border border-dashed border-[#35507a] bg-[#0b1324] px-6 py-14 text-center">
+              <div className="rounded-xl border border-dashed border-line-strong bg-surface px-6 py-14 text-center">
                 <p className="text-sm font-bold text-slate-400">
                   No formulas found.
                 </p>
@@ -732,6 +740,7 @@ export function ContentPage() {
             grade: selectedGrade,
             subject: selectedSubject,
             lesson: selectedLesson,
+            availableLessons,
           }}
         />
       )}
@@ -753,6 +762,14 @@ export function ContentPage() {
           }}
         />
       )}
+
+      <BulkImportModal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        onImportSuccess={() => {
+          refreshCurriculum();
+        }}
+      />
     </CurriculumShell>
   );
 }
@@ -783,7 +800,7 @@ function CurriculumContextPicker({
   onLessonChange: (value: string) => void;
 }) {
   return (
-    <section className="mb-5 grid gap-3 rounded-xl border border-[#243856] bg-[#0b1324] p-4 shadow-[0_14px_34px_rgba(0,0,0,0.14)] md:grid-cols-[minmax(150px,0.7fr)_minmax(150px,0.7fr)_minmax(220px,1fr)]">
+    <section className="mb-5 grid gap-3 rounded-xl border border-line bg-surface p-4 shadow-card md:grid-cols-[minmax(150px,0.7fr)_minmax(150px,0.7fr)_minmax(220px,1fr)]">
       <PickerSelect
         label="Grade"
         value={grade}
@@ -825,7 +842,7 @@ function PickerSelect({
   const valueClasses =
     tone === "cyan"
       ? "text-cyan-300"
-      : "text-white";
+      : "text-fg";
 
   return (
     <label className="relative block">
@@ -838,7 +855,7 @@ function PickerSelect({
         onChange={(event) =>
           onChange(event.target.value)
         }
-        className={`h-11 w-full appearance-none rounded-full border border-[#35507a] bg-[#101a2b] px-4 pr-10 text-xs font-extrabold uppercase outline-none transition hover:border-[#5368ff] focus:border-[#5368ff] ${valueClasses}`}
+        className={`h-11 w-full appearance-none rounded-full border border-line-strong bg-surface-2 px-4 pr-10 text-xs font-extrabold uppercase outline-none transition hover:border-brand focus:border-brand ${valueClasses}`}
       >
         {options.map((option) => (
           <option key={option}>
@@ -868,7 +885,7 @@ function FormulaCard({
   onDelete: () => void;
 }) {
   return (
-    <article className="group flex flex-col gap-4 rounded-xl border border-[#243856] bg-[#101a2b] px-5 py-4 shadow-[0_14px_32px_rgba(0,0,0,0.12)] transition hover:border-[#35507a] sm:flex-row sm:items-center sm:justify-between">
+    <article className="group flex flex-col gap-4 rounded-xl border border-line bg-surface-2 px-5 py-4 shadow-card transition hover:border-line-strong sm:flex-row sm:items-center sm:justify-between">
       <div className="flex min-w-0 items-start gap-4">
         {/* Drag Handle */}
 
@@ -880,15 +897,21 @@ function FormulaCard({
 
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-3">
-            <h3 className="font-mono text-lg font-bold text-[#1fc7e9]">
-              {formula.expression}
-            </h3>
+            <div className="text-lg font-bold text-info">
+              <KatexPreview latex={formula.expression} displayMode={false} />
+            </div>
+
+            {formula.subtopic && (
+              <span className="rounded border border-indigo-500/30 bg-indigo-500/10 px-2 py-0.5 text-[11px] font-bold text-indigo-300">
+                {formula.subtopic}
+              </span>
+            )}
 
             <div className="flex flex-wrap gap-1.5">
               {formula.tags.slice(0, 2).map((tag) => (
                 <span
                   key={tag}
-                  className="rounded border border-[#263a59] bg-[#142038] px-2 py-1 text-[10px] font-extrabold uppercase tracking-wide text-slate-500"
+                  className="rounded border border-line bg-surface-3 px-2 py-1 text-[10px] font-extrabold uppercase tracking-wide text-slate-500"
                 >
                   {tag}
                 </span>
@@ -896,9 +919,29 @@ function FormulaCard({
             </div>
           </div>
 
-          <p className="mt-1 text-xs font-semibold text-slate-500">
+          <p className="mt-1 text-xs font-semibold text-slate-400">
             {formula.description || "No description"}
           </p>
+
+          {((formula.steps && formula.steps.length > 0) || (formula.khmerTerms && formula.khmerTerms.length > 0)) && (
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] font-medium text-slate-400">
+              {formula.steps && formula.steps.length > 0 && (
+                <span className="rounded bg-surface-3 px-2 py-0.5 text-slate-400">
+                  {formula.steps.length} worked step{formula.steps.length > 1 ? "s" : ""}
+                </span>
+              )}
+              {formula.variables && formula.variables.length > 0 && (
+                <span className="rounded bg-surface-3 px-2 py-0.5 text-slate-400">
+                  {formula.variables.length} variable{formula.variables.length > 1 ? "s" : ""}
+                </span>
+              )}
+              {formula.khmerTerms && formula.khmerTerms.length > 0 && (
+                <span className="rounded bg-surface-3 px-2 py-0.5 text-slate-400">
+                  {formula.khmerTerms.length} Khmer term{formula.khmerTerms.length > 1 ? "s" : ""}
+                </span>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -913,7 +956,7 @@ function FormulaCard({
           type="button"
           onClick={onEdit}
           aria-label={`Edit ${formula.expression}`}
-          className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 transition hover:bg-[#18263d] hover:text-white"
+          className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 transition hover:bg-surface-3 hover:text-fg"
         >
           <EditIcon />
         </button>
@@ -964,7 +1007,7 @@ function ContentList({
             onSearchChange(event.target.value)
           }
           placeholder={`Search ${kind.toLowerCase()}...`}
-          className="h-11 w-full rounded-lg border border-[#35507a] bg-[#101a2b] pl-11 pr-4 text-sm font-semibold text-white outline-none transition placeholder:text-slate-500 focus:border-[#5368ff]"
+          className="h-11 w-full rounded-lg border border-line-strong bg-surface-2 pl-11 pr-4 text-sm font-semibold text-fg outline-none transition placeholder:text-slate-500 focus:border-brand"
         />
       </div>
 
@@ -980,7 +1023,7 @@ function ContentList({
         ))}
 
         {items.length === 0 && (
-          <div className="rounded-xl border border-dashed border-[#35507a] bg-[#0b1324] px-6 py-14 text-center">
+          <div className="rounded-xl border border-dashed border-line-strong bg-surface px-6 py-14 text-center">
             <p className="text-sm font-bold text-slate-400">
               No {kind.toLowerCase()} found.
             </p>
@@ -1007,15 +1050,15 @@ function ContentCard({
   onDelete: () => void;
 }) {
   return (
-    <article className="group flex flex-col gap-4 rounded-xl border border-[#243856] bg-[#101a2b] px-5 py-4 shadow-[0_14px_32px_rgba(0,0,0,0.12)] transition hover:border-[#35507a] sm:flex-row sm:items-center sm:justify-between">
+    <article className="group flex flex-col gap-4 rounded-xl border border-line bg-surface-2 px-5 py-4 shadow-card transition hover:border-line-strong sm:flex-row sm:items-center sm:justify-between">
       <div className="flex min-w-0 items-start gap-4">
-        <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[#263a59] bg-[#0b1324] text-xs font-black text-[#1fc7e9]">
+        <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-line bg-surface text-xs font-black text-info">
           {label.slice(0, 2).toUpperCase()}
         </div>
 
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-3">
-            <h3 className="text-sm font-extrabold text-white">
+            <h3 className="text-sm font-extrabold text-fg">
               {item.title}
             </h3>
 
@@ -1023,7 +1066,7 @@ function ContentCard({
               {item.tags.slice(0, 2).map((tag) => (
                 <span
                   key={tag}
-                  className="rounded border border-[#263a59] bg-[#142038] px-2 py-1 text-[10px] font-extrabold uppercase tracking-wide text-slate-500"
+                  className="rounded border border-line bg-surface-3 px-2 py-1 text-[10px] font-extrabold uppercase tracking-wide text-slate-500"
                 >
                   {tag}
                 </span>
@@ -1044,7 +1087,7 @@ function ContentCard({
           type="button"
           onClick={onEdit}
           aria-label={`Edit ${item.title}`}
-          className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 transition hover:bg-[#18263d] hover:text-white"
+          className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 transition hover:bg-surface-3 hover:text-fg"
         >
           <EditIcon />
         </button>
@@ -1153,7 +1196,7 @@ function LessonContentDrawer({
               required
               defaultValue={item?.title}
               placeholder={`e.g. ${label} title`}
-              className="h-12 w-full rounded-lg border border-[#3b5d8f] bg-[#101a2b] px-4 text-sm font-semibold text-slate-50 outline-none transition placeholder:text-slate-400/70 focus:border-[#6f7cff] focus:ring-2 focus:ring-[#5368ff]/20"
+              className="h-12 w-full rounded-lg border border-line-strong bg-surface-2 px-4 text-sm font-semibold text-slate-50 outline-none transition placeholder:text-slate-400/70 focus:border-brand focus:ring-2 focus:ring-brand/20"
             />
           </DrawerSection>
 
@@ -1162,7 +1205,7 @@ function LessonContentDrawer({
               name="summary"
               defaultValue={item?.summary}
               placeholder="Short explanation shown in the content list"
-              className="h-12 w-full rounded-lg border border-[#3b5d8f] bg-[#101a2b] px-4 text-sm font-medium text-slate-100 outline-none transition placeholder:text-slate-400/70 focus:border-[#6f7cff] focus:ring-2 focus:ring-[#5368ff]/20"
+              className="h-12 w-full rounded-lg border border-line-strong bg-surface-2 px-4 text-sm font-medium text-slate-100 outline-none transition placeholder:text-slate-400/70 focus:border-brand focus:ring-2 focus:ring-brand/20"
             />
           </DrawerSection>
 
@@ -1171,7 +1214,7 @@ function LessonContentDrawer({
               name="body"
               defaultValue={item?.body}
               placeholder="Write the full concept, worked example, or exercise instructions..."
-              className="min-h-36 w-full resize-none rounded-lg border border-[#3b5d8f] bg-[#101a2b] px-4 py-3 text-sm font-medium leading-6 text-slate-100 outline-none transition placeholder:text-slate-400/70 focus:border-[#6f7cff] focus:ring-2 focus:ring-[#5368ff]/20"
+              className="min-h-36 w-full resize-none rounded-lg border border-line-strong bg-surface-2 px-4 py-3 text-sm font-medium leading-6 text-slate-100 outline-none transition placeholder:text-slate-400/70 focus:border-brand focus:ring-2 focus:ring-brand/20"
             />
           </DrawerSection>
 
@@ -1183,7 +1226,7 @@ function LessonContentDrawer({
             />
           </DrawerSection>
 
-          <div className="flex items-center justify-between rounded-lg border border-[#3b5d8f] bg-[#101a2b] p-4">
+          <div className="flex items-center justify-between rounded-lg border border-line-strong bg-surface-2 p-4">
             <div>
               <p className="text-sm font-semibold text-slate-50">
                 Publish {label}
@@ -1204,8 +1247,8 @@ function LessonContentDrawer({
                 )
               }
               className={`relative h-6 w-11 shrink-0 rounded-full transition ${published
-                  ? "bg-[#5368ff]"
-                  : "bg-[#263a59]"
+                  ? "bg-brand"
+                  : "bg-surface-3"
                 }`}
             >
               <span
@@ -1218,18 +1261,18 @@ function LessonContentDrawer({
           </div>
         </div>
 
-        <div className="mt-auto grid grid-cols-2 gap-3 border-t border-[#243856] bg-[#0b1324] p-6">
+        <div className="mt-auto grid grid-cols-2 gap-3 border-t border-line bg-surface p-6">
           <button
             type="button"
             onClick={onClose}
-            className="h-12 rounded-lg border border-[#35507a] bg-[#101a2b] text-sm font-bold text-white transition hover:border-[#5368ff] hover:bg-[#0b1324]"
+            className="h-12 rounded-lg border border-line-strong bg-surface-2 text-sm font-bold text-fg transition hover:border-brand hover:bg-surface"
           >
             Cancel
           </button>
 
           <button
             type="submit"
-            className="h-12 rounded-lg bg-gradient-to-r from-[#4367ff] to-[#7a4dff] text-sm font-bold text-white shadow-lg shadow-blue-950/30 transition hover:brightness-110"
+            className="h-12 rounded-lg bg-gradient-to-r from-brand to-brand-2 text-sm font-bold text-white shadow-lg shadow-blue-950/30 transition hover:brightness-110"
           >
             {isEditing
               ? "Save Changes"
@@ -1258,673 +1301,330 @@ function FormulaDrawer({
     grade: string;
     subject: string;
     lesson: string;
+    availableLessons?: string[];
   };
 }) {
   const formula = state.formula;
+  const isEditing = state.mode === "edit";
 
-  const isEditing =
-    state.mode === "edit";
+  const [topic, setTopic] = useState(formula?.lesson ?? context.lesson);
+  const [subtopic, setSubtopic] = useState(formula?.subtopic ?? "");
+  const [expression, setExpression] = useState(formula?.expression ?? "");
+  const [description, setDescription] = useState(formula?.description ?? "");
 
-  /* =====================================================
-     VARIABLES
-  ===================================================== */
-
-  const [variables, setVariables] =
-    useState<FormulaVariable[]>(
-      formula?.variables ?? [
-        {
-          id: createId(),
-          symbol: "",
-          meaning: "",
-          unit: "",
-        },
-      ],
-    );
-
-  /* =====================================================
-     SOLUTION STEPS
-  ===================================================== */
-
-  const [steps, setSteps] =
-    useState<FormulaStep[]>(
-      formula?.steps ?? [
-        {
-          id: createId(),
-          text: "",
-        },
-      ],
-    );
-
-  /* =====================================================
-     KHMER TERMS
-  ===================================================== */
-
-  const [khmerTerms, setKhmerTerms] =
-    useState<KhmerTerm[]>(
-      formula?.khmerTerms ?? [
-        {
-          id: createId(),
-          english: "",
-          khmer: "",
-        },
-      ],
-    );
-
-  /* =====================================================
-     STATUS
-  ===================================================== */
-
-  const [published, setPublished] =
-    useState(
-      formula
-        ? formula.status === "Published"
-        : false,
-    );
-
-  /* =====================================================
-     SUBMIT
-  ===================================================== */
-
-  function handleSubmit(
-    event: FormEvent<HTMLFormElement>,
-  ) {
-    event.preventDefault();
-
-    const formData =
-      new FormData(event.currentTarget);
-
-    const expression = String(
-      formData.get("expression") ?? "",
-    ).trim();
-
-    const description = String(
-      formData.get("description") ?? "",
-    ).trim();
-
-    if (!expression) {
-      return;
-    }
-
-    const nextFormula: Formula = {
-      id:
-        formula?.id ??
-        createId(),
-
-      grade: formula?.grade ?? context.grade,
-
-      subject: formula?.subject ?? context.subject,
-
-      lesson: formula?.lesson ?? context.lesson,
-
-      expression,
-
-      description,
-
-      status: published
-        ? "Published"
-        : "Draft",
-
-      variables: variables.filter(
-        (variable) =>
-          variable.symbol.trim() ||
-          variable.meaning.trim() ||
-          variable.unit.trim(),
-      ),
-
-      steps: steps.filter(
-        (step) =>
-          step.text.trim(),
-      ),
-
-      khmerTerms: khmerTerms.filter(
-        (term) =>
-          term.english.trim() ||
-          term.khmer.trim(),
-      ),
-
-      prerequisites:
-        splitCommaValues(
-          String(
-            formData.get(
-              "prerequisites",
-            ) ?? "",
-          ),
-        ),
-
-      tags: splitCommaValues(
-        String(
-          formData.get("tags") ?? "",
-        ),
-      ),
-    };
-
-    onSave(nextFormula);
-  }
-
-  /* =====================================================
-     VARIABLE FUNCTIONS
-  ===================================================== */
-
-  function addVariable() {
-    setVariables((current) => [
-      ...current,
-
+  const [variables, setVariables] = useState<FormulaVariable[]>(
+    formula?.variables ?? [
       {
         id: createId(),
         symbol: "",
         meaning: "",
         unit: "",
       },
-    ]);
-  }
+    ],
+  );
 
-  function updateVariable(
-    id: string,
-    field:
-      | "symbol"
-      | "meaning"
-      | "unit",
-    value: string,
-  ) {
-    setVariables((current) =>
-      current.map((variable) =>
-        variable.id === id
-          ? {
-            ...variable,
-            [field]: value,
-          }
-          : variable,
-      ),
-    );
-  }
-
-  function removeVariable(
-    id: string,
-  ) {
-    setVariables((current) =>
-      current.filter(
-        (variable) =>
-          variable.id !== id,
-      ),
-    );
-  }
-
-  /* =====================================================
-     STEP FUNCTIONS
-  ===================================================== */
-
-  function addStep() {
-    setSteps((current) => [
-      ...current,
-
+  const [steps, setSteps] = useState<FormulaStep[]>(
+    formula?.steps ?? [
       {
         id: createId(),
-        text: "",
+        heading: "Step 1 · Identify Given Variables & Formula",
+        explanation: "",
+        latex: "",
       },
-    ]);
-  }
+    ],
+  );
 
-  function updateStep(
-    id: string,
-    value: string,
-  ) {
-    setSteps((current) =>
-      current.map((step) =>
-        step.id === id
-          ? {
-            ...step,
-            text: value,
-          }
-          : step,
-      ),
-    );
-  }
+  const [misconceptions, setMisconceptions] = useState<MisconceptionItem[]>(
+    formula?.misconceptions ?? [],
+  );
 
-  function removeStep(
-    id: string,
-  ) {
-    setSteps((current) =>
-      current.filter(
-        (step) =>
-          step.id !== id,
-      ),
-    );
-  }
-
-  /* =====================================================
-     KHMER TERM FUNCTIONS
-  ===================================================== */
-
-  function addKhmerTerm() {
-    setKhmerTerms((current) => [
-      ...current,
-
+  const [khmerTerms, setKhmerTerms] = useState<KhmerTerm[]>(
+    formula?.khmerTerms ?? [
       {
         id: createId(),
         english: "",
         khmer: "",
       },
-    ]);
+    ],
+  );
+
+  const [prerequisites, setPrerequisites] = useState(
+    formula?.prerequisites?.join(", ") ?? "",
+  );
+  const [tags, setTags] = useState(
+    formula?.tags?.join(", ") ?? "",
+  );
+
+  const [published, setPublished] = useState(
+    formula ? formula.status === "Published" : false,
+  );
+
+  const [validationErrors, setValidationErrors] = useState<string[]>([]);
+
+  function validate(
+    expr: string,
+    stps: FormulaStep[],
+    terms: KhmerTerm[],
+    isPub: boolean,
+  ): string[] {
+    const errs: string[] = [];
+    const trimmedExpr = expr.trim();
+
+    if (!trimmedExpr) {
+      errs.push("Formula expression cannot be empty.");
+    } else {
+      try {
+        katex.renderToString(trimmedExpr, { throwOnError: true });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        errs.push(`LaTeX syntax error in formula: ${msg}`);
+      }
+    }
+
+    stps.forEach((st, idx) => {
+      if (st.latex && st.latex.trim()) {
+        try {
+          katex.renderToString(st.latex.trim(), { throwOnError: true });
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          errs.push(`LaTeX syntax error in Step ${idx + 1}: ${msg}`);
+        }
+      }
+    });
+
+    if (isPub) {
+      const hasContent =
+        trimmedExpr.length > 0 ||
+        stps.some((s) => s.heading.trim() || s.explanation.trim() || (s.latex && s.latex.trim()));
+      if (!hasContent) {
+        errs.push("Published content must include at least one formula expression or worked step.");
+      }
+
+      const hasKhmer = terms.some((t) => t.english.trim() && t.khmer.trim());
+      if (!hasKhmer) {
+        errs.push("Published content must include at least one English-to-Khmer vocabulary term.");
+      }
+    }
+
+    return errs;
   }
 
-  function updateKhmerTerm(
-    id: string,
-    field:
-      | "english"
-      | "khmer",
-    value: string,
-  ) {
-    setKhmerTerms((current) =>
-      current.map((term) =>
-        term.id === id
-          ? {
-            ...term,
-            [field]: value,
-          }
-          : term,
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const errs = validate(expression, steps, khmerTerms, published);
+    if (errs.length > 0) {
+      setValidationErrors(errs);
+      return;
+    }
+
+    setValidationErrors([]);
+
+    const nextFormula: Formula = {
+      id: formula?.id ?? createId(),
+      grade: formula?.grade ?? context.grade,
+      subject: formula?.subject ?? context.subject,
+      lesson: topic.trim() || context.lesson,
+      subtopic: subtopic.trim() || undefined,
+      expression: expression.trim(),
+      description: description.trim(),
+      status: published ? "Published" : "Draft",
+      variables: variables.filter(
+        (v) => v.symbol.trim() || v.meaning.trim() || v.unit.trim(),
       ),
-    );
-  }
-
-  function removeKhmerTerm(
-    id: string,
-  ) {
-    setKhmerTerms((current) =>
-      current.filter(
-        (term) =>
-          term.id !== id,
+      steps: steps.filter(
+        (s) => s.heading.trim() || s.explanation.trim() || (s.latex && s.latex.trim()),
       ),
-    );
-  }
+      khmerTerms: khmerTerms.filter(
+        (t) => t.english.trim() || t.khmer.trim(),
+      ),
+      misconceptions: misconceptions.filter(
+        (m) => m.misconception.trim() || m.correction.trim(),
+      ),
+      prerequisites: splitCommaValues(prerequisites),
+      tags: splitCommaValues(tags),
+    };
 
-  /* =====================================================
-     DRAWER
-  ===================================================== */
+    onSave(nextFormula);
+  }
 
   return (
     <Drawer
-      title={
-        isEditing
-          ? "Edit Formula"
-          : "Add Formula"
-      }
+      title={isEditing ? "Edit Formula & Curriculum Content" : "Author STEM Curriculum Content"}
       onClose={onClose}
     >
-      <form
-        onSubmit={handleSubmit}
-        className="flex min-h-0 flex-1 flex-col overflow-y-auto"
-      >
+      <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         <div className="space-y-6 p-6">
+          {/* Validation Errors Alert */}
+          {validationErrors.length > 0 && (
+            <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-4">
+              <div className="flex items-center gap-2 font-bold text-rose-300 text-sm">
+                <span>⚠️ Quality Gate & Validation Issues</span>
+              </div>
+              <ul className="mt-2 list-disc list-inside space-y-1 text-xs text-rose-200">
+                {validationErrors.map((err, i) => (
+                  <li key={i}>{err}</li>
+                ))}
+              </ul>
+            </div>
+          )}
 
-          {/* =============================================
-              EXPRESSION
-          ============================================= */}
-
-          <DrawerSection title="Expression">
-            <input
-              name="expression"
-              required
-              defaultValue={
-                formula?.expression
-              }
-              placeholder="e.g. F = ma"
-              className="h-12 w-full rounded-lg border border-[#35507a] bg-[#101a2b] px-4 font-mono text-sm font-bold text-[#1fc7e9] outline-none transition placeholder:font-sans placeholder:text-slate-500 focus:border-[#5368ff]"
-            />
-          </DrawerSection>
-
-          {/* =============================================
-              DESCRIPTION
-          ============================================= */}
-
-          <DrawerSection title="Description">
-            <input
-              name="description"
-              defaultValue={
-                formula?.description
-              }
-              placeholder="e.g. Fundamental Principle of Dynamics"
-              className="h-12 w-full rounded-lg border border-[#35507a] bg-[#101a2b] px-4 text-sm font-semibold text-white outline-none transition placeholder:text-slate-500 focus:border-[#5368ff]"
-            />
-          </DrawerSection>
-
-          {/* =============================================
-              VARIABLES
-          ============================================= */}
-
-          <DrawerSection
-            title="Variables"
-            actionLabel="+ Add Variable"
-            onAction={addVariable}
-          >
-            <div className="space-y-2">
-              {variables.map(
-                (variable) => (
-                  <div
-                    key={
-                      variable.id
-                    }
-                    className="grid gap-2 rounded-lg border border-[#35507a] bg-[#101a2b] p-2 sm:grid-cols-[28px_76px_1fr_90px_34px]"
-                  >
-                    {/* Drag */}
-
-                    <div className="flex items-center justify-center select-none font-black tracking-[-4px] text-slate-600">
-                      ⋮⋮
-                    </div>
-
-                    {/* Symbol */}
-
-                    <input
-                      value={
-                        variable.symbol
-                      }
-                      onChange={(
-                        event,
-                      ) =>
-                        updateVariable(
-                          variable.id,
-                          "symbol",
-                          event.target
-                            .value,
-                        )
-                      }
-                      placeholder="F"
-                      className="h-9 min-w-0 rounded-md border border-[#263a59] bg-[#0b1324] px-2 text-center font-mono text-sm font-bold text-[#1fc7e9] outline-none focus:border-[#5368ff]"
-                    />
-
-                    {/* Meaning */}
-
-                    <input
-                      value={
-                        variable.meaning
-                      }
-                      onChange={(
-                        event,
-                      ) =>
-                        updateVariable(
-                          variable.id,
-                          "meaning",
-                          event.target
-                            .value,
-                        )
-                      }
-                      placeholder="Force"
-                      className="h-9 min-w-0 rounded-md border border-[#263a59] bg-[#0b1324] px-3 text-sm font-semibold text-white outline-none placeholder:text-slate-600 focus:border-[#5368ff]"
-                    />
-
-                    {/* Unit */}
-
-                    <input
-                      value={
-                        variable.unit
-                      }
-                      onChange={(
-                        event,
-                      ) =>
-                        updateVariable(
-                          variable.id,
-                          "unit",
-                          event.target
-                            .value,
-                        )
-                      }
-                      placeholder="N"
-                      className="h-9 min-w-0 rounded-md border border-[#263a59] bg-[#0b1324] px-2 text-sm font-semibold text-slate-300 outline-none placeholder:text-slate-600 focus:border-[#5368ff]"
-                    />
-
-                    {/* Delete */}
-
-                    <RemoveButton
-                      label="Remove variable"
-                      onClick={() =>
-                        removeVariable(
-                          variable.id,
-                        )
-                      }
-                    />
-                  </div>
-                ),
-              )}
+          {/* Topic & Subtopic */}
+          <div className="rounded-xl border border-line bg-surface p-4 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line pb-3">
+              <div className="flex items-center gap-2">
+                <span className="rounded bg-surface-3 px-2 py-0.5 text-xs font-bold text-slate-400">
+                  {context.grade}
+                </span>
+                <span className="rounded bg-surface-3 px-2 py-0.5 text-xs font-bold text-indigo-400">
+                  {context.subject}
+                </span>
+              </div>
+              <span className="text-xs text-slate-500">STEM Curriculum Node</span>
             </div>
 
-            {variables.length === 0 && (
-              <EmptySmallState text="No variables added." />
-            )}
-          </DrawerSection>
-
-          {/* =============================================
-              SOLUTION STEPS
-          ============================================= */}
-
-          <DrawerSection
-            title="Solution Steps"
-            actionLabel="+ Add Step"
-            onAction={addStep}
-          >
-            <div className="space-y-2">
-              {steps.map(
-                (step, index) => (
-                  <div
-                    key={step.id}
-                    className="grid grid-cols-[34px_1fr_34px] gap-2 rounded-lg border border-[#35507a] bg-[#101a2b] p-2"
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1.5">
+                  Topic (Lesson)
+                </label>
+                {context.availableLessons && context.availableLessons.length > 0 ? (
+                  <select
+                    value={topic}
+                    onChange={(e) => setTopic(e.target.value)}
+                    className="h-11 w-full rounded-lg border border-line-strong bg-surface-2 px-3 text-sm font-semibold text-fg outline-none focus:border-brand"
                   >
-                    {/* Number */}
+                    {context.availableLessons.map((l) => (
+                      <option key={l} value={l}>
+                        {l}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    value={topic}
+                    onChange={(e) => setTopic(e.target.value)}
+                    className="h-11 w-full rounded-lg border border-line-strong bg-surface-2 px-3 text-sm font-semibold text-fg outline-none focus:border-brand"
+                    placeholder="e.g. Limits of Functions"
+                  />
+                )}
+              </div>
 
-                    <div className="flex h-9 items-center justify-center text-xs font-extrabold text-slate-500">
-                      {index + 1}.
-                    </div>
-
-                    {/* Step */}
-
-                    <input
-                      value={
-                        step.text
-                      }
-                      onChange={(
-                        event,
-                      ) =>
-                        updateStep(
-                          step.id,
-                          event.target
-                            .value,
-                        )
-                      }
-                      placeholder="Describe this solution step..."
-                      className="h-9 min-w-0 rounded-md border border-[#263a59] bg-[#0b1324] px-3 text-sm font-semibold text-white outline-none placeholder:text-slate-600 focus:border-[#5368ff]"
-                    />
-
-                    <RemoveButton
-                      label="Remove step"
-                      onClick={() =>
-                        removeStep(
-                          step.id,
-                        )
-                      }
-                    />
-                  </div>
-                ),
-              )}
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1.5">
+                  Subtopic / Section Name
+                </label>
+                <input
+                  value={subtopic}
+                  onChange={(e) => setSubtopic(e.target.value)}
+                  placeholder="e.g. Indeterminate Form 0/0, Snell's Law"
+                  className="h-11 w-full rounded-lg border border-line-strong bg-surface-2 px-3 text-sm font-semibold text-fg outline-none placeholder:text-slate-600 focus:border-brand"
+                />
+              </div>
             </div>
+          </div>
 
-            {steps.length === 0 && (
-              <EmptySmallState text="No solution steps added." />
-            )}
-          </DrawerSection>
+          {/* Formula & Variables Editor */}
+          <FormulaEditor
+            expression={expression}
+            onExpressionChange={(val) => {
+              setExpression(val);
+              if (validationErrors.length > 0) setValidationErrors([]);
+            }}
+            description={description}
+            onDescriptionChange={setDescription}
+            variables={variables}
+            onVariablesChange={setVariables}
+          />
 
-          {/* =============================================
-              KHMER TERMS
-          ============================================= */}
+          {/* Worked Solution Steps Blueprint */}
+          <WorkedStepsEditor
+            steps={steps}
+            onStepsChange={setSteps}
+          />
 
-          <DrawerSection
-            title="Khmer Terms (ពាក្យខ្មែរ)"
-            actionLabel="+ Add Term"
-            onAction={addKhmerTerm}
-          >
-            <div className="space-y-2">
-              {khmerTerms.map(
-                (term) => (
-                  <div
-                    key={term.id}
-                    className="grid gap-2 rounded-lg border border-[#35507a] bg-[#101a2b] p-2 sm:grid-cols-[1fr_28px_1fr_34px]"
-                  >
-                    {/* English */}
+          {/* Common Misconceptions */}
+          <MisconceptionsEditor
+            misconceptions={misconceptions}
+            onMisconceptionsChange={setMisconceptions}
+          />
 
-                    <input
-                      value={
-                        term.english
-                      }
-                      onChange={(
-                        event,
-                      ) =>
-                        updateKhmerTerm(
-                          term.id,
-                          "english",
-                          event.target
-                            .value,
-                        )
-                      }
-                      placeholder="Force"
-                      className="h-9 min-w-0 rounded-md border border-[#263a59] bg-[#0b1324] px-3 text-sm font-semibold text-white outline-none placeholder:text-slate-600 focus:border-[#5368ff]"
-                    />
+          {/* Khmer Vocabulary Terms */}
+          <KhmerTermsEditor
+            terms={khmerTerms}
+            onTermsChange={setKhmerTerms}
+          />
 
-                    {/* Arrow */}
-
-                    <div className="flex items-center justify-center text-slate-600">
-                      →
-                    </div>
-
-                    {/* Khmer */}
-
-                    <input
-                      value={
-                        term.khmer
-                      }
-                      onChange={(
-                        event,
-                      ) =>
-                        updateKhmerTerm(
-                          term.id,
-                          "khmer",
-                          event.target
-                            .value,
-                        )
-                      }
-                      placeholder="កម្លាំង"
-                      className="h-9 min-w-0 rounded-md border border-[#263a59] bg-[#0b1324] px-3 text-sm font-semibold text-white outline-none placeholder:text-slate-600 focus:border-[#5368ff]"
-                    />
-
-                    {/* Delete */}
-
-                    <RemoveButton
-                      label="Remove Khmer term"
-                      onClick={() =>
-                        removeKhmerTerm(
-                          term.id,
-                        )
-                      }
-                    />
-                  </div>
-                ),
-              )}
-            </div>
-
-            {khmerTerms.length ===
-              0 && (
-                <EmptySmallState text="No Khmer terms added." />
-              )}
-          </DrawerSection>
-
-          {/* =============================================
-              PREREQUISITES + TAGS
-          ============================================= */}
-
+          {/* Prerequisites + Tags */}
           <div className="grid gap-4 sm:grid-cols-2">
             <DrawerSection title="Prerequisites">
-              <TagInput
-                name="prerequisites"
-                defaultValue={
-                  formula?.prerequisites.join(
-                    ", ",
-                  )
-                }
-                placeholder="Vectors, Motion"
+              <input
+                value={prerequisites}
+                onChange={(e) => setPrerequisites(e.target.value)}
+                placeholder="e.g. Vectors, Factoring, Trig identities"
+                className="h-11 w-full rounded-lg border border-line-strong bg-surface-2 px-3 text-sm font-semibold text-fg outline-none placeholder:text-slate-600 focus:border-brand"
               />
             </DrawerSection>
 
-            <DrawerSection title="Tags">
-              <TagInput
-                name="tags"
-                defaultValue={
-                  formula?.tags.join(
-                    ", ",
-                  )
-                }
-                placeholder="Dynamics, Force"
+            <DrawerSection title="Search Tags">
+              <input
+                value={tags}
+                onChange={(e) => setTags(e.target.value)}
+                placeholder="e.g. Optics, Refraction, Physics"
+                className="h-11 w-full rounded-lg border border-line-strong bg-surface-2 px-3 text-sm font-semibold text-fg outline-none placeholder:text-slate-600 focus:border-brand"
               />
             </DrawerSection>
           </div>
 
-          {/* =============================================
-              PUBLISH STATUS
-          ============================================= */}
-
-          <div className="flex items-center justify-between rounded-lg border border-[#35507a] bg-[#101a2b] p-4">
+          {/* Publish Toggle */}
+          <div className="flex items-center justify-between rounded-xl border border-line-strong bg-surface-2 p-4">
             <div>
-              <p className="text-sm font-bold text-white">
-                Publish Formula
-              </p>
-
-              <p className="mt-1 text-xs text-slate-600">
-                Published formulas are visible in the curriculum.
+              <p className="text-sm font-bold text-fg">Publish to Student Visual Tutor</p>
+              <p className="mt-1 text-xs text-slate-400">
+                Published content is indexed for RAG retrieval and immediate whiteboard generation.
               </p>
             </div>
 
             <button
               type="button"
               role="switch"
-              aria-checked={
-                published
-              }
-              onClick={() =>
-                setPublished(
-                  (current) =>
-                    !current,
-                )
-              }
-              className={`relative h-6 w-11 shrink-0 rounded-full transition ${published
-                  ? "bg-[#5368ff]"
-                  : "bg-[#263a59]"
-                }`}
+              aria-checked={published}
+              onClick={() => {
+                const nextPub = !published;
+                setPublished(nextPub);
+                if (nextPub) {
+                  const check = validate(expression, steps, khmerTerms, true);
+                  if (check.length > 0) setValidationErrors(check);
+                }
+              }}
+              className={`relative h-6 w-11 shrink-0 rounded-full transition ${
+                published ? "bg-brand" : "bg-surface-3"
+              }`}
             >
               <span
-                className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow transition-all ${published
-                    ? "left-6"
-                    : "left-1"
-                  }`}
+                className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow transition-all ${
+                  published ? "left-6" : "left-1"
+                }`}
               />
             </button>
           </div>
         </div>
 
-        {/* =================================================
-            BOTTOM ACTIONS
-        ================================================= */}
-
-        <div className="mt-auto grid grid-cols-2 gap-3 border-t border-[#243856] bg-[#0b1324] p-6">
+        {/* Bottom Actions */}
+        <div className="mt-auto grid grid-cols-2 gap-3 border-t border-line bg-surface p-6">
           <button
             type="button"
             onClick={onClose}
-            className="h-12 rounded-lg border border-[#35507a] bg-[#101a2b] text-sm font-bold text-white transition hover:border-[#5368ff] hover:bg-[#0b1324]"
+            className="h-12 rounded-lg border border-line-strong bg-surface-2 text-sm font-bold text-fg transition hover:border-brand hover:bg-surface"
           >
             Cancel
           </button>
 
           <button
             type="submit"
-            className="h-12 rounded-lg bg-gradient-to-r from-[#4367ff] to-[#7a4dff] text-sm font-bold text-white shadow-lg shadow-blue-950/30 transition hover:brightness-110"
+            className="h-12 rounded-lg bg-gradient-to-r from-brand to-brand-2 text-sm font-bold text-white shadow-lg shadow-blue-950/30 transition hover:brightness-110"
           >
-            {isEditing
-              ? "Save Changes"
-              : "Save Formula"}
+            {isEditing ? "Save Changes" : "Save Formula & Steps"}
           </button>
         </div>
       </form>
@@ -1950,7 +1650,7 @@ function DrawerSection({
   return (
     <section>
       <div className="mb-2 flex items-center justify-between gap-4">
-        <h4 className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-[#8da7d8]">
+        <h4 className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-accent-fg">
           {title}
         </h4>
 
@@ -1959,7 +1659,7 @@ function DrawerSection({
             <button
               type="button"
               onClick={onAction}
-              className="text-xs font-extrabold text-[#5368ff] transition hover:text-[#7a8cff]"
+              className="text-xs font-extrabold text-brand transition hover:text-brand"
             >
               {actionLabel}
             </button>
@@ -1994,7 +1694,7 @@ function TagInput({
         placeholder={
           placeholder
         }
-        className="h-12 w-full rounded-lg border border-[#3b5d8f] bg-[#101a2b] px-4 text-sm font-medium text-slate-100 outline-none transition placeholder:text-slate-400/70 focus:border-[#6f7cff] focus:ring-2 focus:ring-[#5368ff]/20"
+        className="h-12 w-full rounded-lg border border-line-strong bg-surface-2 px-4 text-sm font-medium text-slate-100 outline-none transition placeholder:text-slate-400/70 focus:border-brand focus:ring-2 focus:ring-brand/20"
       />
 
       <p className="mt-1.5 text-[11px] font-medium text-slate-500">
@@ -2037,7 +1737,7 @@ function EmptySmallState({
   text: string;
 }) {
   return (
-    <div className="rounded-lg border border-dashed border-[#35507a] bg-[#101a2b] px-4 py-4 text-center text-xs font-semibold text-slate-600">
+    <div className="rounded-lg border border-dashed border-line-strong bg-surface-2 px-4 py-4 text-center text-xs font-semibold text-slate-600">
       {text}
     </div>
   );
@@ -2083,7 +1783,7 @@ function EmptyTab({
   tab: ContentTab;
 }) {
   return (
-    <div className="rounded-xl border border-dashed border-[#35507a] bg-[#0b1324] px-6 py-16 text-center">
+    <div className="rounded-xl border border-dashed border-line-strong bg-surface px-6 py-16 text-center">
       <p className="text-sm font-bold text-slate-400">
         {tab}
       </p>
@@ -2203,14 +1903,25 @@ function contentToFormula(content: AdminCurriculumContent): Formula {
     grade: content.grade,
     subject: content.subject,
     lesson: content.lesson,
+    subtopic: content.subtopic ?? "",
     expression: content.expression,
     description: content.description,
     status: content.status,
-    variables: content.variables as FormulaVariable[],
-    steps: content.steps as FormulaStep[],
-    khmerTerms: content.khmerTerms as KhmerTerm[],
-    prerequisites: content.prerequisites,
-    tags: content.tags,
+    variables: (content.variables || []) as FormulaVariable[],
+    steps: ((content.steps || []) as Array<Record<string, unknown>>).map((s, idx) => ({
+      id: String(s.id ?? `step-${idx}`),
+      heading: String(s.heading ?? `Step ${idx + 1}`),
+      explanation: String(s.explanation ?? s.text ?? ""),
+      latex: typeof s.latex === "string" ? s.latex : undefined,
+    })),
+    khmerTerms: (content.khmerTerms || []) as KhmerTerm[],
+    misconceptions: ((content.common_misconceptions || []) as Array<Record<string, unknown>>).map((m, idx) => ({
+      id: String(m.id ?? `mis-${idx}`),
+      misconception: String(m.misconception ?? m.text ?? ""),
+      correction: String(m.correction ?? ""),
+    })),
+    prerequisites: content.prerequisites || [],
+    tags: content.tags || [],
   };
 }
 

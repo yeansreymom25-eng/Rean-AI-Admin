@@ -39,7 +39,7 @@ export function ActionButtons({
       <button
         type="button"
         onClick={onEdit}
-        className="inline-flex h-9 items-center gap-2 rounded-lg border border-[#243856] bg-[#101a2b] px-3 text-sm font-bold text-slate-300 transition hover:border-[#5368ff] hover:text-white focus:outline-none focus:ring-2 focus:ring-[#5368ff]/45"
+        className="inline-flex h-9 items-center gap-2 rounded-lg border border-line bg-surface-2 px-3 text-sm font-bold text-slate-300 transition hover:border-brand hover:text-fg focus:outline-none focus:ring-2 focus:ring-brand/45"
       >
         <EditIcon />
         Edit
@@ -51,13 +51,13 @@ export function ActionButtons({
           aria-label="More actions"
           aria-expanded={isMenuOpen}
           onClick={() => setIsMenuOpen((current) => !current)}
-          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[#243856] bg-[#101a2b] text-slate-400 transition hover:border-[#5368ff] hover:text-white focus:outline-none focus:ring-2 focus:ring-[#5368ff]/45"
+          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-line bg-surface-2 text-slate-400 transition hover:border-brand hover:text-fg focus:outline-none focus:ring-2 focus:ring-brand/45"
         >
           <MoreIcon />
         </button>
 
         {isMenuOpen && (
-          <div className="absolute right-0 top-11 z-20 w-44 overflow-hidden rounded-lg border border-[#243856] bg-[#0b1324] py-1 text-left shadow-[0_18px_45px_rgba(0,0,0,0.32)]">
+          <div className="absolute right-0 top-11 z-20 w-44 overflow-hidden rounded-lg border border-line bg-surface py-1 text-left shadow-card">
             <MenuButton onClick={() => runMenuAction(onEdit)}>View details</MenuButton>
             <MenuButton onClick={() => runMenuAction(onDuplicate)}>
               Duplicate
@@ -88,8 +88,8 @@ function MenuButton({
     <button
       type="button"
       onClick={onClick}
-      className={`block w-full px-4 py-2 text-left text-sm font-semibold transition hover:bg-[#101a2b] ${
-        danger ? "text-rose-300 hover:text-rose-200" : "text-slate-300 hover:text-white"
+      className={`block w-full px-4 py-2 text-left text-sm font-semibold transition hover:bg-surface-2 ${
+        danger ? "text-rose-300 hover:text-rose-200" : "text-slate-300 hover:text-fg"
       }`}
     >
       {children}

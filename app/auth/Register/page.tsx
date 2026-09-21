@@ -50,7 +50,7 @@ export default function RegisterPage() {
       footer={
         <>
           Already have an account?{" "}
-          <Link href="/auth/Login" className="font-bold text-[#5368ff]">
+          <Link href="/auth/Login" className="font-bold text-brand">
             Sign in
           </Link>
         </>
@@ -95,9 +95,9 @@ export default function RegisterPage() {
       </form>
 
       <div className="my-6 flex items-center gap-3">
-        <span className="h-px flex-1 bg-[#243856]" />
+        <span className="h-px flex-1 bg-surface-3" />
         <span className="text-xs font-bold uppercase text-slate-600">or</span>
-        <span className="h-px flex-1 bg-[#243856]" />
+        <span className="h-px flex-1 bg-surface-3" />
       </div>
 
       <GoogleButton onClick={handleGoogleSignIn} disabled={isSubmitting}>

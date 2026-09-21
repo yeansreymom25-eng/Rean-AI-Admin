@@ -49,7 +49,7 @@ export default function LoginPage() {
       footer={
         <>
           New to Rean AI?{" "}
-          <Link href="/auth/Register" className="font-bold text-[#5368ff]">
+          <Link href="/auth/Register" className="font-bold text-brand">
             Create an account
           </Link>
         </>
@@ -80,7 +80,7 @@ export default function LoginPage() {
           <div className="mt-3 text-right">
             <Link
               href="/auth/Forgot_Pw"
-              className="text-sm font-bold text-[#5368ff]"
+              className="text-sm font-bold text-brand"
             >
               Forgot password?
             </Link>
@@ -97,9 +97,9 @@ export default function LoginPage() {
       </form>
 
       <div className="my-6 flex items-center gap-3">
-        <span className="h-px flex-1 bg-[#243856]" />
+        <span className="h-px flex-1 bg-surface-3" />
         <span className="text-xs font-bold uppercase text-slate-600">or</span>
-        <span className="h-px flex-1 bg-[#243856]" />
+        <span className="h-px flex-1 bg-surface-3" />
       </div>
 
       <GoogleButton onClick={handleGoogleSignIn} disabled={isSubmitting}>
