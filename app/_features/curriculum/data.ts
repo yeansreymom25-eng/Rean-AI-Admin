@@ -58,4 +58,5 @@ export const curriculumLinks = [
   { label: "Subjects", href: "/subjects" },
   { label: "Topics", href: "/topics" },
   { label: "Content", href: "/content" },
+  { label: "Versions", href: "/curriculum_versions" },
 ];
