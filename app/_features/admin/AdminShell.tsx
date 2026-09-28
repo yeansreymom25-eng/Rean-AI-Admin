@@ -108,13 +108,22 @@ export function AdminShell({
   const router = useRouter();
   const pathname = usePathname();
   const { t } = usePreferences();
-  const [storedUser, setStoredUser] = useState<AdminUser | null>(() => getStoredAdminUser());
+  const [storedUser, setStoredUser] = useState<AdminUser | null>(null);
   const [fetchedDashboard, setFetchedDashboard] = useState<AdminDashboardData | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isPaletteOpen, setIsPaletteOpen] = useState(false);
   const [collapsedValue, setCollapsedValue] = useStoredString("rean_admin_sidebar", "open");
   const isCollapsed = collapsedValue === "collapsed";
   const ownsData = dashboard === undefined;
+
+  // Read the stored admin on the client only. getStoredAdminUser() returns null
+  // during SSR, so seeding useState with it made the server HTML ("Admin") disagree
+  // with the first client render (the real name), and React threw a hydration
+  // mismatch on every admin page. The bootstrap effect below cannot cover this: it
+  // returns early when the page supplies its own dashboard data.
+  useEffect(() => {
+    setStoredUser((current) => current ?? getStoredAdminUser());
+  }, []);
 
   useEffect(() => {
     if (!getAccessToken()) {
