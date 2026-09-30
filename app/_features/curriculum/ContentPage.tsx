@@ -3,6 +3,7 @@
 import {
   useEffect,
   useMemo,
+  useRef,
   useState,
   type FormEvent,
   type ReactNode,
@@ -407,7 +408,6 @@ export function ContentPage() {
 
   async function saveFormula(nextFormula: Formula) {
     const payload = buildContentPayload("Formula", nextFormula);
-    if (!payload) return;
     const savedContent =
       drawerState?.mode === "edit"
         ? await updateAdminCurriculumContent(drawerState.formula.id, payload)
@@ -444,7 +444,6 @@ export function ContentPage() {
   ) {
     const contentKind = singularContentLabel(kind) as "Concept" | "Example" | "Exercise";
     const payload = buildContentPayload(contentKind, nextItem);
-    if (!payload) return;
     const savedContent =
       contentDrawerState?.mode === "edit"
         ? await updateAdminCurriculumContent(contentDrawerState.item.id, payload)
@@ -512,26 +511,50 @@ export function ContentPage() {
   function buildContentPayload(
     kind: "Formula" | "Concept" | "Example" | "Exercise",
     item: Formula | LessonContent,
-  ): AdminCurriculumContentInput | null {
+  ): AdminCurriculumContentInput {
     const selectedGradeData = grades.find((grade) => grade.name === selectedGrade);
+    if (!selectedGradeData) {
+      throw new Error(`Grade '${selectedGrade}' not found in curriculum data.`);
+    }
+
     const selectedSubjectData = subjects.find(
       (subject) =>
-        subject.grade_level_id === selectedGradeData?.grade_level_id &&
+        subject.grade_level_id === selectedGradeData.grade_level_id &&
         subject.name === selectedSubject,
     );
+    if (!selectedSubjectData) {
+      throw new Error(`Subject '${selectedSubject}' not found for ${selectedGrade}.`);
+    }
+
     const selectedTopicData = topics.find(
       (topic) =>
-        topic.subject_id === selectedSubjectData?.subject_id &&
+        topic.subject_id === selectedSubjectData.subject_id &&
         topic.name === selectedLesson,
     );
-    const selectedVersion = versions.find((version) =>
-      version.grade_level_id === selectedGradeData?.grade_level_id &&
-      version.subject_id === selectedSubjectData?.subject_id &&
-      version.status === "draft",
-    );
+    if (!selectedTopicData) {
+      throw new Error(`Lesson '${selectedLesson}' not found for ${selectedSubject}.`);
+    }
 
-    if (!selectedGradeData || !selectedSubjectData || !selectedTopicData || !selectedVersion) {
-      return null;
+    const selectedVersion =
+      versions.find((version) =>
+        version.grade_level_id === selectedGradeData.grade_level_id &&
+        version.subject_id === selectedSubjectData.subject_id &&
+        version.status === "draft",
+      ) ||
+      versions.find((version) =>
+        version.grade_level_id === selectedGradeData.grade_level_id &&
+        version.subject_id === selectedSubjectData.subject_id &&
+        version.status !== "archived",
+      ) ||
+      versions.find((version) =>
+        version.grade_level_id === selectedGradeData.grade_level_id &&
+        version.subject_id === selectedSubjectData.subject_id,
+      );
+
+    if (!selectedVersion) {
+      throw new Error(
+        `No curriculum version found for ${selectedSubject} (${selectedGrade}). Please create a draft version in the Curriculum Versions tab before adding content.`
+      );
     }
 
     const formulaItem = kind === "Formula" ? (item as Formula) : null;
@@ -1136,8 +1159,11 @@ function LessonContentDrawer({
         ? item.status === "Published"
         : false,
     );
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const formRef = useRef<HTMLFormElement>(null);
 
-  function handleSubmit(
+  async function handleSubmit(
     event: FormEvent<HTMLFormElement>,
   ) {
     event.preventDefault();
@@ -1150,8 +1176,13 @@ function LessonContentDrawer({
     ).trim();
 
     if (!title) {
+      setSubmitError("Title is required.");
+      formRef.current?.scrollTo({ top: 0, behavior: "smooth" });
       return;
     }
+
+    setSubmitError(null);
+    setIsSubmitting(true);
 
     const nextItem: LessonContent = {
       id: item?.id ?? createId(),
@@ -1173,7 +1204,14 @@ function LessonContentDrawer({
       ),
     };
 
-    onSave(state.kind, nextItem);
+    try {
+      await onSave(state.kind, nextItem);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setSubmitError(msg);
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
   return (
@@ -1186,6 +1224,7 @@ function LessonContentDrawer({
       onClose={onClose}
     >
       <form
+        ref={formRef}
         onSubmit={handleSubmit}
         className="flex min-h-0 flex-1 flex-col overflow-y-auto"
       >
@@ -1261,6 +1300,13 @@ function LessonContentDrawer({
           </div>
         </div>
 
+        {submitError && (
+          <div className="border-t border-rose-500/40 bg-rose-500/15 px-6 py-3">
+            <p className="text-xs font-bold text-rose-300">⚠️ Failed to save:</p>
+            <p className="mt-0.5 text-xs text-rose-200">{submitError}</p>
+          </div>
+        )}
+
         <div className="mt-auto grid grid-cols-2 gap-3 border-t border-line bg-surface p-6">
           <button
             type="button"
@@ -1272,11 +1318,20 @@ function LessonContentDrawer({
 
           <button
             type="submit"
-            className="h-12 rounded-lg bg-gradient-to-r from-brand to-brand-2 text-sm font-bold text-white shadow-lg shadow-blue-950/30 transition hover:brightness-110"
+            disabled={isSubmitting}
+            className="h-12 rounded-lg bg-gradient-to-r from-brand to-brand-2 text-sm font-bold text-white shadow-lg shadow-blue-950/30 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {isEditing
-              ? "Save Changes"
-              : `Save ${label}`}
+            {isSubmitting ? (
+              <span className="flex items-center justify-center gap-2">
+                <svg className="h-4 w-4 animate-spin text-white" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                </svg>
+                Saving...
+              </span>
+            ) : (
+              isEditing ? "Save Changes" : `Save ${label}`
+            )}
           </button>
         </div>
       </form>
@@ -1360,6 +1415,9 @@ function FormulaDrawer({
   );
 
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const formRef = useRef<HTMLFormElement>(null);
 
   function validate(
     expr: string,
@@ -1402,23 +1460,26 @@ function FormulaDrawer({
 
       const hasKhmer = terms.some((t) => t.english.trim() && t.khmer.trim());
       if (!hasKhmer) {
-        errs.push("Published content must include at least one English-to-Khmer vocabulary term.");
+        errs.push("Publishing requires at least one English-to-Khmer vocabulary term (please add one in the Khmer Terms section).");
       }
     }
 
     return errs;
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     const errs = validate(expression, steps, khmerTerms, published);
     if (errs.length > 0) {
       setValidationErrors(errs);
+      formRef.current?.scrollTo({ top: 0, behavior: "smooth" });
       return;
     }
 
     setValidationErrors([]);
+    setSubmitError(null);
+    setIsSubmitting(true);
 
     const nextFormula: Formula = {
       id: formula?.id ?? createId(),
@@ -1445,7 +1506,14 @@ function FormulaDrawer({
       tags: splitCommaValues(tags),
     };
 
-    onSave(nextFormula);
+    try {
+      await onSave(nextFormula);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setSubmitError(msg);
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
   return (
@@ -1453,7 +1521,7 @@ function FormulaDrawer({
       title={isEditing ? "Edit Formula & Curriculum Content" : "Author STEM Curriculum Content"}
       onClose={onClose}
     >
-      <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+      <form ref={formRef} onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         <div className="space-y-6 p-6">
           {/* Validation Errors Alert */}
           {validationErrors.length > 0 && (
@@ -1594,7 +1662,11 @@ function FormulaDrawer({
                 setPublished(nextPub);
                 if (nextPub) {
                   const check = validate(expression, steps, khmerTerms, true);
-                  if (check.length > 0) setValidationErrors(check);
+                  setValidationErrors(check);
+                } else {
+                  setValidationErrors((prev) =>
+                    prev.filter((e) => !e.includes("Published content") && !e.includes("Publishing requires"))
+                  );
                 }
               }}
               className={`relative h-6 w-11 shrink-0 rounded-full transition ${
@@ -1610,6 +1682,28 @@ function FormulaDrawer({
           </div>
         </div>
 
+        {/* Inline Bottom Validation Errors Alert */}
+        {validationErrors.length > 0 && (
+          <div className="border-t border-rose-500/30 bg-rose-500/10 px-6 py-3">
+            <p className="text-xs font-bold text-rose-300">
+              ⚠️ Please resolve {validationErrors.length} issue{validationErrors.length > 1 ? "s" : ""} before saving:
+            </p>
+            <ul className="mt-1 list-disc list-inside space-y-0.5 text-xs text-rose-200">
+              {validationErrors.map((err, i) => (
+                <li key={i}>{err}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* Submit Network / Server Error */}
+        {submitError && (
+          <div className="border-t border-rose-500/40 bg-rose-500/15 px-6 py-3">
+            <p className="text-xs font-bold text-rose-300">⚠️ Failed to save:</p>
+            <p className="mt-0.5 text-xs text-rose-200">{submitError}</p>
+          </div>
+        )}
+
         {/* Bottom Actions */}
         <div className="mt-auto grid grid-cols-2 gap-3 border-t border-line bg-surface p-6">
           <button
@@ -1622,9 +1716,20 @@ function FormulaDrawer({
 
           <button
             type="submit"
-            className="h-12 rounded-lg bg-gradient-to-r from-brand to-brand-2 text-sm font-bold text-white shadow-lg shadow-blue-950/30 transition hover:brightness-110"
+            disabled={isSubmitting}
+            className="h-12 rounded-lg bg-gradient-to-r from-brand to-brand-2 text-sm font-bold text-white shadow-lg shadow-blue-950/30 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {isEditing ? "Save Changes" : "Save Formula & Steps"}
+            {isSubmitting ? (
+              <span className="flex items-center justify-center gap-2">
+                <svg className="h-4 w-4 animate-spin text-white" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                </svg>
+                Saving...
+              </span>
+            ) : (
+              isEditing ? "Save Changes" : "Save Formula & Steps"
+            )}
           </button>
         </div>
       </form>
