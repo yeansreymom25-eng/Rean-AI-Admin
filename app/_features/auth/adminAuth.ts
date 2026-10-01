@@ -2,8 +2,8 @@ import { signInWithPopup } from "firebase/auth";
 import { getFirebaseAuth, getGoogleProvider } from "./firebaseClient";
 
 const API_BASE_URL =
-  process.env.NEXT_PUBLIC_BACKEND_BASE_URL ??
-  (process.env.NODE_ENV === "production" ? "" : "http://localhost:4000/api/v1");
+  process.env.NEXT_PUBLIC_BACKEND_BASE_URL ||
+  (process.env.NODE_ENV === "production" ? "/api/v1" : "http://localhost:4000/api/v1");
 
 const ACCESS_TOKEN_KEY = "rean_admin_cookie_session";
 const ADMIN_USER_KEY = "rean_admin_user";
