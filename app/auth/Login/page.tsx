@@ -1,10 +1,9 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
-import { adminLogin, adminLoginWithGoogle } from "../../_features/auth/adminAuth";
-import { AuthShell, Field, GoogleButton, PrimaryButton } from "../AuthShell";
+import { adminLogin } from "../../_features/auth/adminAuth";
+import { AuthShell, Field, PrimaryButton } from "../AuthShell";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -28,32 +27,10 @@ export default function LoginPage() {
     }
   }
 
-  async function handleGoogleSignIn() {
-    setErrorMessage("");
-    setIsSubmitting(true);
-
-    try {
-      await adminLoginWithGoogle();
-      router.push("/admin_dashboard");
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Unable to sign in with Google");
-    } finally {
-      setIsSubmitting(false);
-    }
-  }
-
   return (
     <AuthShell
       title="Welcome back"
       subtitle="Sign in to monitor students, curriculum, and AI quality from one secure workspace."
-      footer={
-        <>
-          New to Rean AI?{" "}
-          <Link href="/auth/Register" className="font-bold text-brand">
-            Create an account
-          </Link>
-        </>
-      }
     >
       <form onSubmit={handleSubmit} className="space-y-5">
         <Field
@@ -66,26 +43,16 @@ export default function LoginPage() {
           required
           autoComplete="email"
         />
-        <div>
-          <Field
-            label="Password"
-            name="password"
-            type="password"
-            placeholder="Enter password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            required
-            autoComplete="current-password"
-          />
-          <div className="mt-3 text-right">
-            <Link
-              href="/auth/Forgot_Pw"
-              className="text-sm font-bold text-brand"
-            >
-              Forgot password?
-            </Link>
-          </div>
-        </div>
+        <Field
+          label="Password"
+          name="password"
+          type="password"
+          placeholder="Enter password"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          required
+          autoComplete="current-password"
+        />
 
         {errorMessage && (
           <p className="text-sm font-semibold text-rose-300">{errorMessage}</p>
@@ -95,16 +62,6 @@ export default function LoginPage() {
           {isSubmitting ? "Signing in..." : "Sign in"}
         </PrimaryButton>
       </form>
-
-      <div className="my-6 flex items-center gap-3">
-        <span className="h-px flex-1 bg-surface-3" />
-        <span className="text-xs font-bold uppercase text-slate-600">or</span>
-        <span className="h-px flex-1 bg-surface-3" />
-      </div>
-
-      <GoogleButton onClick={handleGoogleSignIn} disabled={isSubmitting}>
-        Continue with Google
-      </GoogleButton>
     </AuthShell>
   );
 }
