@@ -54,19 +54,18 @@ export default function StudentsPage() {
       });
   }, [router]);
 
-  const students = studentsData?.students ?? [];
   const gradeOptions = studentsData?.filters.grades.length ? studentsData.filters.grades : [...grades];
   const statusOptions = studentsData?.filters.statuses.length ? studentsData.filters.statuses : [...statuses];
 
   const filteredStudents = useMemo(
     () =>
-      students.filter(
+      (studentsData?.students ?? []).filter(
         (student) =>
           (gradeFilter === "All Grades" || student.grade === gradeFilter) &&
           (statusFilter === "All Status" || student.status === statusFilter) &&
           (`${student.name} ${student.id}`.toLowerCase().includes(search.trim().toLowerCase())),
       ),
-    [gradeFilter, statusFilter, search, students],
+    [gradeFilter, statusFilter, search, studentsData],
   );
 
   return (

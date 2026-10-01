@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -173,7 +174,7 @@ export function ContentPage() {
   const [versions, setVersions] = useState<AdminCurriculumVersion[]>([]);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
-  function refreshCurriculum() {
+  const refreshCurriculum = useCallback(() => {
     return Promise.all([
       loadAdminGrades(),
       loadAdminSubjects(),
@@ -218,7 +219,7 @@ export function ContentPage() {
           router.replace("/auth/Login");
         }
       });
-  }
+  }, [router]);
 
   useEffect(() => {
     if (!getAccessToken()) {
@@ -227,7 +228,7 @@ export function ContentPage() {
     }
 
     void refreshCurriculum();
-  }, [router]);
+  }, [refreshCurriculum, router]);
 
   const curriculumOptions = useMemo(() => {
     if (!grades.length) return [] as CurriculumOption[];
@@ -1810,45 +1811,6 @@ function TagInput({
 }
 
 /* =========================================================
-   REMOVE BUTTON
-========================================================= */
-
-function RemoveButton({
-  label,
-  onClick,
-}: {
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      onClick={onClick}
-      className="flex h-9 w-9 items-center justify-center rounded-md text-slate-600 transition hover:bg-rose-500/10 hover:text-rose-300"
-    >
-      <TrashIcon />
-    </button>
-  );
-}
-
-/* =========================================================
-   SMALL EMPTY STATE
-========================================================= */
-
-function EmptySmallState({
-  text,
-}: {
-  text: string;
-}) {
-  return (
-    <div className="rounded-lg border border-dashed border-line-strong bg-surface-2 px-4 py-4 text-center text-xs font-semibold text-slate-600">
-      {text}
-    </div>
-  );
-}
-
-/* =========================================================
    FORMULA STATUS
 ========================================================= */
 
@@ -1873,28 +1835,6 @@ function FormulaStatus({
           }`}
       >
         {status}
-      </p>
-    </div>
-  );
-}
-
-/* =========================================================
-   EMPTY TAB
-========================================================= */
-
-function EmptyTab({
-  tab,
-}: {
-  tab: ContentTab;
-}) {
-  return (
-    <div className="rounded-xl border border-dashed border-line-strong bg-surface px-6 py-16 text-center">
-      <p className="text-sm font-bold text-slate-400">
-        {tab}
-      </p>
-
-      <p className="mt-1 text-xs text-slate-600">
-        This section is ready for its content editor.
       </p>
     </div>
   );

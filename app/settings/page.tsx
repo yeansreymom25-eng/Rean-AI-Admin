@@ -225,6 +225,8 @@ export default function SettingsPage() {
           <div className="mb-6 flex flex-col gap-4 rounded-lg border border-line bg-surface-2 p-4 sm:flex-row sm:items-center">
             <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-full border-2 border-brand bg-gradient-to-br from-brand to-brand-2 text-xl font-extrabold text-white">
               {settings.profile.profile_image_url ? (
+                // Profile previews may be local data URLs before upload completes.
+                // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={settings.profile.profile_image_url}
                   alt="Admin profile preview"

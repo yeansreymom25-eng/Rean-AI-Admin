@@ -11,24 +11,33 @@
   },
   "dependencies": {
     "@types/katex": "^0.16.8",
-    "firebase": "^12.17.1",
+    "firebase": "^12.19.0",
     "katex": "^0.18.7",
-    "next": "16.3.0",
+    "next": "16.3.7",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^6.1.1",
     "eslint": "^9",
-    "eslint-config-next": "16.3.0",
+    "eslint-config-next": "16.3.7",
+    "jsdom": "^30.1.1",
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^4.1.11"
   },
   "optionalDependencies": {
-    "@next/swc-darwin-arm64": "^16.3.0"
+    "@next/swc-darwin-arm64": "16.3.7"
+  },
+  "overrides": {
+    "@grpc/grpc-js": "1.14.5"
   }
 }

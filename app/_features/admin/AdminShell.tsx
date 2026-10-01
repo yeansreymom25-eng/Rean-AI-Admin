@@ -9,6 +9,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
   type KeyboardEvent as ReactKeyboardEvent,
   type RefObject,
@@ -68,6 +69,10 @@ function isAuthExpiredError(error: unknown) {
 // Every page mounts its own shell, so share one in-flight bootstrap request for
 // a short window instead of re-fetching the profile and alerts on each click.
 let bootstrapCache: { at: number; promise: Promise<[AdminUser, AdminDashboardData]> } | null = null;
+const subscribeToHydration = () => () => {};
+const clientHydrationSnapshot = () => true;
+const serverHydrationSnapshot = () => false;
+
 function loadShellBootstrap() {
   if (!bootstrapCache || Date.now() - bootstrapCache.at > 30_000) {
     const promise = Promise.all([verifyAdminSession(), loadAdminDashboard()]);
@@ -108,22 +113,22 @@ export function AdminShell({
   const router = useRouter();
   const pathname = usePathname();
   const { t } = usePreferences();
-  const [storedUser, setStoredUser] = useState<AdminUser | null>(null);
+  const hasHydrated = useSyncExternalStore(
+    subscribeToHydration,
+    clientHydrationSnapshot,
+    serverHydrationSnapshot,
+  );
+  const restoredUser = useMemo(
+    () => (hasHydrated ? getStoredAdminUser() : null),
+    [hasHydrated],
+  );
+  const [fetchedUser, setFetchedUser] = useState<AdminUser | null>(null);
   const [fetchedDashboard, setFetchedDashboard] = useState<AdminDashboardData | null>(null);
-  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [openDrawerPath, setOpenDrawerPath] = useState<string | null>(null);
   const [isPaletteOpen, setIsPaletteOpen] = useState(false);
   const [collapsedValue, setCollapsedValue] = useStoredString("rean_admin_sidebar", "open");
   const isCollapsed = collapsedValue === "collapsed";
   const ownsData = dashboard === undefined;
-
-  // Read the stored admin on the client only. getStoredAdminUser() returns null
-  // during SSR, so seeding useState with it made the server HTML ("Admin") disagree
-  // with the first client render (the real name), and React threw a hydration
-  // mismatch on every admin page. The bootstrap effect below cannot cover this: it
-  // returns early when the page supplies its own dashboard data.
-  useEffect(() => {
-    setStoredUser((current) => current ?? getStoredAdminUser());
-  }, []);
 
   useEffect(() => {
     if (!getAccessToken()) {
@@ -135,7 +140,7 @@ export function AdminShell({
     loadShellBootstrap()
       .then(([user, data]) => {
         if (cancelled) return;
-        setStoredUser({ ...user, ...data.admin });
+        setFetchedUser({ ...user, ...data.admin });
         setFetchedDashboard(data);
       })
       .catch((error) => {
@@ -149,12 +154,17 @@ export function AdminShell({
     };
   }, [router, ownsData]);
 
-  // Close the phone drawer whenever the route changes.
-  const [drawerPath, setDrawerPath] = useState(pathname);
-  if (drawerPath !== pathname) {
-    setDrawerPath(pathname);
-    setIsDrawerOpen(false);
-  }
+  const isDrawerVisible = openDrawerPath === pathname;
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) setOpenDrawerPath(null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [pathname]);
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -168,7 +178,7 @@ export function AdminShell({
   }, []);
 
   const data = ownsData ? fetchedDashboard : dashboard;
-  const admin = { ...storedUser, ...data?.admin };
+  const admin = { ...restoredUser, ...fetchedUser, ...data?.admin };
   const displayName = adminName || admin.full_name || "Admin";
   const displayImage = profileImage ?? admin.profile_image_url ?? null;
   const displayRole = adminRole || t("shell.admin");
@@ -202,20 +212,20 @@ export function AdminShell({
         />
       </aside>
 
-      {isDrawerOpen && (
+      {isDrawerVisible && (
         <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true" aria-label={t("shell.openMenu")}>
           <button
             type="button"
             aria-label={t("shell.closeMenu")}
             className="absolute inset-0 bg-overlay backdrop-blur-sm"
-            onClick={() => setIsDrawerOpen(false)}
+            onClick={() => setOpenDrawerPath(null)}
           />
           <aside className="relative flex h-full w-[min(300px,86vw)] flex-col border-r border-line bg-surface shadow-2xl">
             <SidebarContent
               collapsed={false}
               flaggedCount={flaggedCount}
               pathname={pathname}
-              onClose={() => setIsDrawerOpen(false)}
+              onClose={() => setOpenDrawerPath(null)}
             />
           </aside>
         </div>
@@ -225,7 +235,9 @@ export function AdminShell({
         <header className="sticky top-0 z-40 flex h-16 items-center gap-3 border-b border-line bg-canvas/85 px-4 backdrop-blur-md sm:px-6">
           <button
             type="button"
-            onClick={() => setIsDrawerOpen(true)}
+            onClick={() => {
+              setOpenDrawerPath(pathname);
+            }}
             className="-ml-1 grid h-10 w-10 place-items-center rounded-lg text-slate-400 hover:bg-surface-2 hover:text-fg lg:hidden"
             aria-label={t("shell.openMenu")}
           >
@@ -372,6 +384,7 @@ function SidebarContent({
                   <li key={item.href}>
                     <Link
                       href={item.href}
+                      onClick={onClose}
                       title={collapsed ? t(item.label) : undefined}
                       aria-current={isActive ? "page" : undefined}
                       className={`group relative flex h-10 items-center gap-3 rounded-lg text-sm font-medium transition ${

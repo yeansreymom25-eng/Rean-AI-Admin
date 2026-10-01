@@ -314,6 +314,8 @@ function SubjectTable({
               <td className="px-6 py-6">
                 <span className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-lg border border-line bg-surface-2 text-xs font-extrabold text-info">
                   {subject.icon?.startsWith("data:image") || subject.icon?.startsWith("http") ? (
+                    // Subject icons may be uploaded data URLs or arbitrary admin-managed hosts.
+                    // eslint-disable-next-line @next/next/no-img-element
                     <img src={subject.icon} alt="" className="h-full w-full object-cover" />
                   ) : (
                     subject.icon

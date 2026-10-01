@@ -113,7 +113,10 @@ export function TopicsPage() {
       return groupedSubjects;
     }, {});
   }, [subjects]);
-  const subjectOptions = subjectsByGrade[selectedGrade] ?? [];
+  const subjectOptions = useMemo(
+    () => subjectsByGrade[selectedGrade] ?? [],
+    [selectedGrade, subjectsByGrade],
+  );
 
   useEffect(() => {
     if (!selectedGrade && gradeOptions.length) {
