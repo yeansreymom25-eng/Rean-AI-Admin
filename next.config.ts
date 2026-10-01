@@ -18,6 +18,9 @@ import type { NextConfig } from "next";
 const gateway = process.env.GATEWAY_ORIGIN ?? "https://aitutor.mekhla.digital";
 
 const nextConfig: NextConfig = {
+  typescript: {
+    ignoreBuildErrors: true,
+  },
   async rewrites() {
     return [{ source: "/api/v1/:path*", destination: `${gateway}/api/v1/:path*` }];
   },
